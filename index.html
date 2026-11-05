@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIT COMUNICACIONES | Panel</title>
+<style>
+:root{--navy:#101d35;--blue:#1677e8;--bg:#f3f6fb;--ink:#17243a;--muted:#68778d;--line:#e5ebf3;--green:#16865b}
+*{box-sizing:border-box}body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--navy);color:white;padding:22px 28px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-size:20px;font-weight:800;letter-spacing:.4px}.sub{font-size:12px;color:#b8c8df;margin-top:5px}
+.pill{border:1px solid #49617f;border-radius:20px;padding:8px 12px;font-size:12px;color:#dbeafe}
+main{max-width:1180px;margin:26px auto;padding:0 18px}
+h1{font-size:25px;margin:0 0 6px}.intro{color:var(--muted);margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.stat,.panel{background:white;border:1px solid var(--line);border-radius:14px;padding:18px;box-shadow:0 3px 12px #17243a08}
+.stat small{color:var(--muted)}.num{font-size:28px;font-weight:800;margin-top:8px}
+.layout{display:grid;grid-template-columns:1.15fr .85fr;gap:16px;margin-top:18px}
+.panel h2{font-size:17px;margin:0 0 14px}
+.menuitem{padding:12px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.menuitem:last-child{border:0}.tag{font-size:11px;color:#1559a8;background:#eaf3ff;border-radius:20px;padding:5px 9px;white-space:nowrap}
+.status{color:var(--green);font-weight:700;font-size:12px}
+.notice{margin-top:18px;background:#fff8e8;border:1px solid #f3dfb1;padding:14px 16px;border-radius:12px;color:#765416;font-size:13px;line-height:1.5}
+footer{color:var(--muted);font-size:12px;text-align:center;padding:28px}
+@media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}.layout{grid-template-columns:1fr}}
+@media(max-width:430px){.grid{grid-template-columns:1fr 1fr}.stat{padding:13px}.num{font-size:23px}}
+</style>
+</head>
+<body>
+<header>
+ <div><div class="brand">PIT COMUNICACIONES</div><div class="sub">Panel de administración · Versión inicial de prueba</div></div>
+ <div class="pill">● DEMO · Sin conexión a WhatsApp</div>
+</header>
+<main>
+ <h1>Resumen de atención</h1>
+ <p class="intro">Aquí administrarás conversaciones, reportes y solicitudes de instalación.</p>
+ <section class="grid">
+  <div class="stat"><small>Conversaciones nuevas</small><div class="num">0</div></div>
+  <div class="stat"><small>Reportes técnicos</small><div class="num">0</div></div>
+  <div class="stat"><small>Solicitudes de instalación</small><div class="num">0</div></div>
+  <div class="stat"><small>Comprobantes por revisar</small><div class="num">0</div></div>
+ </section>
+ <section class="layout">
+  <div class="panel">
+   <h2>Menú del bot</h2>
+   <div class="menuitem"><span>1. No tengo Internet</span><span class="tag">Soporte</span></div>
+   <div class="menuitem"><span>2. Mi Internet está lento</span><span class="tag">Soporte</span></div>
+   <div class="menuitem"><span>3. Información sobre pagos</span><span class="tag">Pagos</span></div>
+   <div class="menuitem"><span>4. Consultar planes y precios</span><span class="tag">Ventas</span></div>
+   <div class="menuitem"><span>5. Contratar Internet</span><span class="tag">Ventas</span></div>
+   <div class="menuitem"><span>6. Cobertura y horarios</span><span class="tag">Información</span></div>
+   <div class="menuitem"><span>7. Hablar con un técnico</span><span class="tag">Atención humana</span></div>
+  </div>
+  <div class="panel">
+   <h2>Información comercial configurada</h2>
+   <div class="menuitem"><span>Plan Familiar · 25 Mbps</span><strong>$350/mes</strong></div>
+   <div class="menuitem"><span>Instalación · La Libertad</span><strong>$600</strong></div>
+   <div class="menuitem"><span>Instalación · Emiliano Zapata</span><strong>$800</strong></div>
+   <div class="menuitem"><span>Instalación · Ejido Morelos</span><strong>$1,200</strong></div>
+   <p style="font-size:12px;color:#68778d;line-height:1.5">Las cuotas de instalación son de un solo pago. Otras localidades y planes se consultan con el técnico.</p>
+  </div>
+ </section>
+ <div class="notice"><strong>Importante:</strong> esta es únicamente la primera pantalla visual. Todavía no tiene inicio de sesión, base de datos, recepción de mensajes ni conexión con WhatsApp. No ingreses información real de clientes en esta demo.</div>
+</main>
+<footer>PIT COMUNICACIONES · Proyecto privado · Panel de prueba</footer>
+</body>
+</html>
