@@ -141,15 +141,85 @@ function normalize(text) {
 }
 
 function isYes(text) {
-  return /^(si|sí|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya)$/.test(
+  return /^(si|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya)$/.test(
     normalize(text)
   );
 }
 
 function isNo(text) {
-  return /^(no|nop|negativo|todavia no|aun no|aún no)$/.test(
+  return /^(no|nop|negativo|todavia no|aun no)$/.test(
     normalize(text)
   );
+}
+
+function isQuestion(text) {
+  const normalized = normalize(text);
+
+  return (
+    text.includes("?") ||
+    /^(y |cuanto|cuantos|cual|cuales|como|que|donde|cuando|por que|cuesta|costo|mensualidad|mensualidades|precio|precios|planes|velocidad)/.test(
+      normalized
+    )
+  );
+}
+
+function isMonthlyPriceQuestion(text) {
+  const normalized = normalize(text);
+
+  return /mensualidad|mensualidades|mes cuesta|cuesta al mes|precio del internet|precio de internet|costo del internet|cuanto cuesta.*internet|cuanto.*pagar.*mes|plan familiar/.test(
+    normalized
+  );
+}
+
+function monthlyPriceReply() {
+  return `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*
+
+📥 25 Mbps de bajada.
+📤 10 Mbps de subida.
+💰 *$350 MXN mensuales.*
+♾️ Sin límite de navegación.
+
+La velocidad se comparte entre los dispositivos conectados.`;
+}
+
+function isLikelyName(text) {
+  const value = String(text || "").trim();
+  const normalized = normalize(value);
+
+  if (value.length < 5 || value.length > 80) return false;
+  if (isQuestion(value)) return false;
+
+  if (
+    /\d|@|https?:|precio|cuesta|mensualidad|internet|instalacion|direccion|colonia|calle|referencia|quiero|gracias|ok|si$/.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+
+  const words = value.split(/\s+/).filter(Boolean);
+
+  if (words.length < 2 || words.length > 5) return false;
+
+  return words.every(word => /^[a-záéíóúüñ'-]+$/i.test(word));
+}
+
+function isLikelyAddress(text) {
+  const value = String(text || "").trim();
+  const normalized = normalize(value);
+
+  if (value.length < 5 || value.length > 180) return false;
+  if (isQuestion(value)) return false;
+
+  if (
+    /mensualidad|mensualidades|cuanto cuesta|precio|internet|plan familiar|contratar|gracias/.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+
+  return true;
 }
 
 // MEMORIA
@@ -549,17 +619,7 @@ Si realizas un pago, envíanos tu nombre completo y una fotografía del comproba
 ⏳ Tu pago quedará pendiente de revisión hasta verificarlo.`;
 
     case "4":
-      return `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*
-
-📥 25 Mbps de bajada.
-📤 10 Mbps de subida.
-💰 $350 MXN mensuales.
-♾️ Sin límite de navegación.
-📱 Puedes conectar los dispositivos que necesites.
-
-La velocidad se comparte entre los dispositivos conectados.
-
-¿Te gustaría contratar? Escribe *5*.`;
+      return monthlyPriceReply() + "\n\n¿Te gustaría contratar? Escribe *5*.";
 
     case "5":
       return `🏠 *¡QUEREMOS LLEVAR INTERNET HASTA TU HOGAR!*
@@ -605,6 +665,10 @@ Un técnico deberá revisar tu solicitud.`;
 
 // CONTRATACIONES
 function startSales(phone) {
+  guideSessions.delete(phone);
+  guideOffers.delete(phone);
+  salesOffers.delete(phone);
+
   salesSessions.set(phone, {
     step: "locality",
     locality: "",
@@ -624,7 +688,6 @@ function getInstallationFee(locality) {
   return null;
 }
 
-// DETECTAR LOCALIDADES MENCIONADAS
 function getMentionedLocalities(text) {
   const normalized = normalize(text);
   const found = [];
@@ -645,6 +708,42 @@ function getMentionedLocalities(text) {
   }
 
   return [...new Set(found)];
+}
+
+// PREGUNTAS FRECUENTES DURANTE LA CONTRATACIÓN
+function answerSalesQuestion(message) {
+  const normalized = normalize(message);
+
+  if (isMonthlyPriceQuestion(message)) {
+    return monthlyPriceReply();
+  }
+
+  if (/costo de instalacion|cuanto cuesta instalar|precio de instalacion/.test(normalized)) {
+    return `🛠️ *COSTOS DE INSTALACIÓN*
+
+📍 La Libertad, Chiapas: $600 MXN.
+📍 Emiliano Zapata, Tabasco: $800 MXN.
+📍 Ejido Morelos: $1,200 MXN.
+
+El costo depende de la localidad donde se instalará el servicio.`;
+  }
+
+  if (/velocidad|cuantos megas|cuanta velocidad/.test(normalized)) {
+    return `🚀 *PLAN FAMILIAR*
+
+📥 25 Mbps de bajada.
+📤 10 Mbps de subida.
+💰 $350 MXN mensuales.
+♾️ Sin límite de navegación.`;
+  }
+
+  if (/formas de pago|como puedo pagar|metodos de pago/.test(normalized)) {
+    return `💳 Puedes pagar mediante efectivo, transferencia bancaria o depósito en OXXO.
+
+Los pagos quedan pendientes de revisión hasta verificar el comprobante.`;
+  }
+
+  return null;
 }
 
 // PROCESAR ACEPTACIÓN DE CONTRATACIÓN
@@ -695,6 +794,8 @@ function handleSalesOfferAcceptance(phone, message) {
 
   return `${feeText}
 
+El Plan Familiar cuesta $350 MXN mensuales e incluye 25 Mbps de bajada y 10 Mbps de subida.
+
 Para continuar con tu contratación, ¿me compartes tu nombre completo?`;
 }
 
@@ -702,21 +803,40 @@ function handleSales(phone, message) {
   const text = message.trim();
   const session = salesSessions.get(phone);
 
+  if (!session || Date.now() - session.updatedAt > SESSION_TTL) {
+    salesSessions.delete(phone);
+    return null;
+  }
+
   if (normalize(text) === "cancelar") {
     salesSessions.delete(phone);
 
     return "De acuerdo, hemos detenido la solicitud. Si necesitas ayuda, escribe MENU.";
   }
 
-  if (!session || Date.now() - session.updatedAt > SESSION_TTL) {
-    return null;
-  }
-
   session.updatedAt = Date.now();
 
+  // RESPONDER PREGUNTAS SIN CAMBIAR EL PASO PENDIENTE
+  const questionReply = answerSalesQuestion(text);
+
+  if (questionReply) {
+    return `${questionReply}
+
+${getSalesPendingPrompt(session)}`;
+  }
+
+  // NO INTERPRETAR PREGUNTAS COMO DATOS DE CONTRATACIÓN
+  if (isQuestion(text)) {
+    return `Con gusto te aclaro tus dudas.
+
+El Plan Familiar cuesta $350 MXN mensuales e incluye 25 Mbps de bajada y 10 Mbps de subida.
+
+${getSalesPendingPrompt(session)}`;
+  }
+
   if (session.step === "locality") {
-    if (text.length < 3) {
-      return "Por favor, dime el nombre de tu localidad o comunidad.";
+    if (text.length < 3 || isQuestion(text)) {
+      return "Por favor, dime el nombre de tu localidad o comunidad para revisar el costo de instalación.";
     }
 
     session.locality = text;
@@ -730,12 +850,16 @@ function handleSales(phone, message) {
 
     return `${feeText}
 
+El Plan Familiar cuesta $350 MXN mensuales.
+
 Ahora, ¿me compartes tu nombre completo?`;
   }
 
   if (session.step === "name") {
-    if (text.length < 5 || !text.includes(" ")) {
-      return "Por favor, escribe tu nombre y apellidos.";
+    if (!isLikelyName(text)) {
+      return `Para continuar necesito tu nombre y apellidos.
+
+Si tienes alguna duda sobre el servicio, puedes preguntarme y después seguimos con tu nombre.`;
     }
 
     session.name = text;
@@ -747,8 +871,10 @@ Ahora compárteme tu dirección, colonia, calle o una referencia de ubicación.`
   }
 
   if (session.step === "address") {
-    if (text.length < 5) {
-      return "Por favor, envíame una dirección o referencia más completa.";
+    if (!isLikelyAddress(text)) {
+      return `Necesito una dirección, colonia, calle o referencia de ubicación para registrar tu solicitud.
+
+Puedes hacerme preguntas sobre el servicio y después continuamos.`;
     }
 
     session.address = text;
@@ -786,6 +912,22 @@ Tu solicitud todavía no representa una instalación confirmada.`;
   }
 
   return null;
+}
+
+function getSalesPendingPrompt(session) {
+  if (session.step === "locality") {
+    return "Primero, dime en qué localidad deseas instalar el servicio.";
+  }
+
+  if (session.step === "name") {
+    return "Para continuar con tu contratación, ¿me compartes tu nombre completo?";
+  }
+
+  if (session.step === "address") {
+    return "Ahora compárteme tu dirección, colonia, calle o una referencia de ubicación.";
+  }
+
+  return "";
 }
 
 // INTELIGENCIA ARTIFICIAL
@@ -1033,7 +1175,21 @@ app.post("/webhook", (req, res) => {
           continue;
         }
 
-        // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA PRIMERO
+        // SI HAY CONTRATACIÓN ACTIVA, SE ATIENDE PRIMERO
+        if (salesSessions.has(from)) {
+          const salesReply = handleSales(from, text);
+
+          if (salesReply) {
+            saveConversation(from, "user", text);
+            saveConversation(from, "assistant", salesReply);
+
+            sendWhatsAppMessage(from, salesReply).catch(console.error);
+          }
+
+          continue;
+        }
+
+        // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA
         if (guideSessions.has(from)) {
           handleConnectionGuide(from, text).catch(console.error);
           continue;
@@ -1058,7 +1214,7 @@ app.post("/webhook", (req, res) => {
           }
         }
 
-        // ACEPTACIÓN DE UNA OFERTA DE CONTRATACIÓN GENERADA POR LA IA
+        // ACEPTACIÓN DE UNA OFERTA DE CONTRATACIÓN
         const offerReply = handleSalesOfferAcceptance(from, text);
 
         if (offerReply) {
@@ -1075,22 +1231,13 @@ app.post("/webhook", (req, res) => {
           continue;
         }
 
-        // CONTRATACIONES EN CURSO
-        const salesReply = handleSales(from, text);
-
-        if (salesReply) {
-          saveConversation(from, "user", text);
-          saveConversation(from, "assistant", salesReply);
-
-          sendWhatsAppMessage(from, salesReply).catch(console.error);
-          continue;
-        }
-
         // OPCIONES DEL MENÚ
         const fixedReply = getMenuReply(text);
 
         if (fixedReply) {
-          if (normalized === "5") startSales(from);
+          if (normalized === "5") {
+            startSales(from);
+          }
 
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", fixedReply);
@@ -1099,11 +1246,29 @@ app.post("/webhook", (req, res) => {
           continue;
         }
 
+        // PREGUNTAS DE PRECIOS Y PLANES
+        if (isMonthlyPriceQuestion(text)) {
+          const reply = monthlyPriceReply();
+
+          saveConversation(from, "user", text);
+          saveConversation(from, "assistant", reply);
+
+          sendWhatsAppMessage(from, reply).catch(console.error);
+          continue;
+        }
+
         // RESPUESTA DE IA
         getAIReply(from, text)
           .then(async reply => {
             if (isCustomerPaused(from)) {
               console.log(`RESPUESTA CANCELADA POR PAUSA: ${from}`);
+              return;
+            }
+
+            // SI SE INICIÓ UNA CONTRATACIÓN MIENTRAS RESPONDÍA LA IA,
+            // NO ENVIAR RESPUESTAS ANTIGUAS NI MENSAJES DE SOPORTE.
+            if (salesSessions.has(from)) {
+              console.log(`RESPUESTA IA OMITIDA: contratación activa para ${from}`);
               return;
             }
 
@@ -1123,7 +1288,6 @@ app.post("/webhook", (req, res) => {
               saveConversation(from, "assistant", reply);
             }
 
-            // GUARDAR OFERTA DE CONTRATACIÓN Y LOCALIDADES DEL CONTEXTO
             const offersSales =
               /contrat|ayude con la contratacion|ayudarte con la contratacion/.test(
                 normalize(reply)
@@ -1138,7 +1302,6 @@ app.post("/webhook", (req, res) => {
               });
             }
 
-            // DETECTAR OFERTA DE GUÍA DE CONEXIÓN
             const offersGuide =
               /guia rapida|guia para revisar|revisar los cables|revisar las conexiones|guia visual/.test(
                 normalize(reply)
