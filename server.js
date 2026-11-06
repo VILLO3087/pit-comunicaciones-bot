@@ -17,11 +17,16 @@ const API_VERSION = process.env.GRAPH_API_VERSION || "v25.0";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-// Memoria temporal por cliente. Se pierde si Railway reinicia el servicio.
+// Memoria temporal por cliente.
 const conversations = new Map();
 const salesSessions = new Map();
 const MEMORY_LIMIT = 12;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
+
+// Pausa automática por atención manual.
+const manualPauses = new Map();
+const MANUAL_PAUSE_DURATION = 30 * 60 * 1000;
+const processedEchoes = new Map();
 
 const businessInfo = {
   business: "PIT COMUNICACIONES",
@@ -38,7 +43,11 @@ const businessInfo = {
     { locality: "Emiliano Zapata, Tabasco", feeMXN: 800 },
     { locality: "Ejido Morelos", feeMXN: 1200 }
   ],
-  paymentMethods: ["Efectivo", "Transferencia bancaria", "Depósito en OXXO"],
+  paymentMethods: [
+    "Efectivo",
+    "Transferencia bancaria",
+    "Depósito en OXXO"
+  ],
   supportHours: {
     mondayToFriday: "07:00 a 18:00",
     saturday: "07:00 a 14:00",
@@ -48,36 +57,50 @@ const businessInfo = {
 
 function getConversation(phone) {
   const session = conversations.get(phone);
+
   if (!session || Date.now() - session.updatedAt > SESSION_TTL) {
-    const fresh = { messages: [], updatedAt: Date.now() };
+    const fresh = {
+      messages: [],
+      updatedAt: Date.now()
+    };
+
     conversations.set(phone, fresh);
     return fresh;
   }
+
   session.updatedAt = Date.now();
   return session;
 }
 
 function saveConversation(phone, role, content) {
   const session = getConversation(phone);
+
   session.messages.push({ role, content });
   session.messages = session.messages.slice(-MEMORY_LIMIT);
   session.updatedAt = Date.now();
 }
 
 function mainMenu() {
-  return `¡Hola! Bienvenido a PIT COMUNICACIONES.
+  return `📡 *PIT COMUNICACIONES*
 
-¿En qué podemos ayudarte?
+¡Hola! 👋 Bienvenido.
 
-1. No tengo Internet.
-2. Mi Internet está lento.
-3. Información sobre pagos.
-4. Consultar planes y precios.
-5. Contratar Internet.
-6. Consultar cobertura y horarios.
-7. Hablar con un técnico.
+Estamos para ayudarte. ¿Qué servicio necesitas hoy?
 
-Escribe el número de la opción que necesitas.`;
+📋 *MENÚ DE ATENCIÓN*
+
+1️⃣ 📡 No tengo Internet.
+2️⃣ 🐢 Mi Internet está lento.
+3️⃣ 💳 Información sobre pagos.
+4️⃣ 🚀 Consultar planes y precios.
+5️⃣ 🏠 ¡Quiero contratar Internet!
+6️⃣ 📍 Cobertura y horarios de atención.
+7️⃣ 👨‍🔧 Hablar con un técnico.
+
+✍️ Escribe el número de la opción que necesitas.
+
+💙 *PIT COMUNICACIONES*
+Conectando contigo.`;
 }
 
 async function sendWhatsAppMessage(to, message) {
@@ -121,80 +144,92 @@ function getMenuReply(message) {
 
   switch (option) {
     case "1":
-      return `Vamos a revisar tu conexión.
+      return `📡 *SIN SERVICIO DE INTERNET*
+
+Vamos a revisar tu conexión.
 
 1. Revisa que los cables del router estén conectados.
 2. Desconecta el adaptador PoE y el router de la corriente.
 3. Espera 30 segundos y vuelve a conectarlos.
 4. Espera de 3 a 5 minutos.
 
-No presiones RESET ni cambies los cables de los puertos POE/LAN.
+⚠️ No presiones RESET ni cambies los cables de los puertos POE/LAN.
 
-Si continúa sin Internet, escribe TECNICO.`;
+Si continúa sin Internet, escribe *TECNICO*.`;
 
     case "2":
-      return `Vamos a revisar la velocidad de tu Internet.
+      return `🐢 *INTERNET LENTO*
+
+Vamos a revisar la velocidad de tu Internet.
 
 1. Acércate al router.
 2. Revisa que los cables estén bien conectados.
 3. Desconecta el router durante 30 segundos.
 4. Conéctalo nuevamente y espera de 3 a 5 minutos.
 
-Si continúa lento, escribe TECNICO.`;
+Si continúa lento, escribe *TECNICO*.`;
 
     case "3":
-      return `Información de pagos de PIT COMUNICACIONES.
+      return `💳 *INFORMACIÓN DE PAGOS*
 
-Puedes pagar mediante:
-• Efectivo.
-• Transferencia bancaria.
-• Depósito en OXXO.
+Puedes realizar tu pago mediante:
+
+💵 Efectivo.
+🏦 Transferencia bancaria.
+🏪 Depósito en OXXO.
 
 Si realizas un pago, envíanos tu nombre completo y una fotografía del comprobante.
 
-Tu pago quedará pendiente de revisión hasta verificarlo.`;
+⏳ Tu pago quedará pendiente de revisión hasta verificarlo.`;
 
     case "4":
-      return `PLAN FAMILIAR PIT COMUNICACIONES
+      return `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*
 
-• 25 Mbps de bajada.
-• 10 Mbps de subida.
-• $350 MXN mensuales.
-• Sin límite de navegación.
-• Puedes conectar los dispositivos que necesites.
+📥 25 Mbps de bajada.
+📤 10 Mbps de subida.
+💰 $350 MXN mensuales.
+♾️ Sin límite de navegación.
+📱 Puedes conectar los dispositivos que necesites.
 
-La velocidad se comparte entre los dispositivos conectados.`;
+La velocidad se comparte entre los dispositivos conectados.
+
+¿Te gustaría contratar? Escribe *5*.`;
 
     case "5":
-      salesSessions.set("current", null);
-      return `¡Excelente! Nos interesa ayudarte a contratar.
+      return `🏠 *¡QUEREMOS LLEVAR INTERNET HASTA TU HOGAR!*
 
 Primero, ¿en qué localidad vives?`;
 
     case "6":
-      return `HORARIOS DE ATENCIÓN TÉCNICA
+      return `📍 *COBERTURA Y HORARIOS*
+
+🕒 HORARIOS DE ATENCIÓN TÉCNICA
 
 Lunes a viernes: 07:00 a 18:00.
 Sábados: 07:00 a 14:00.
 Domingos: Sin servicio técnico.
 
-COSTOS DE INSTALACIÓN:
-• La Libertad, Chiapas: $600.
-• Emiliano Zapata, Tabasco: $800.
-• Ejido Morelos: $1,200.
+🛠️ *COSTOS DE INSTALACIÓN*
 
-En otras comunidades debemos verificar cobertura.`;
+📍 La Libertad, Chiapas: $600.
+📍 Emiliano Zapata, Tabasco: $800.
+📍 Ejido Morelos: $1,200.
+
+En otras comunidades debemos verificar cobertura y costo.`;
 
     case "7":
     case "tecnico":
     case "técnico":
-      return `Con gusto te ayudaremos.
+      return `👨‍🔧 *ATENCIÓN TÉCNICA*
 
-Para solicitar atención técnica, envíanos:
-• Nombre completo.
-• Localidad.
-• Número de teléfono.
-• Describe brevemente tu problema.
+Con gusto te ayudaremos.
+
+Para solicitar atención, envíanos:
+
+👤 Nombre completo.
+📍 Localidad.
+📱 Número de teléfono.
+📝 Describe brevemente tu problema.
 
 Un técnico deberá revisar tu solicitud.`;
 
@@ -226,7 +261,7 @@ function getInstallationFee(locality) {
 function handleSales(phone, message) {
   const text = message.trim();
   const lower = text.toLowerCase();
-  let session = salesSessions.get(phone);
+  const session = salesSessions.get(phone);
 
   if (lower === "cancelar") {
     salesSessions.delete(phone);
@@ -395,7 +430,73 @@ REGLAS:
   }
 }
 
-// Verificación del webhook de Meta
+// PAUSA DE ATENCIÓN MANUAL
+
+function pauseCustomer(phone) {
+  if (!phone) return;
+
+  const pauseUntil = Date.now() + MANUAL_PAUSE_DURATION;
+  manualPauses.set(phone, pauseUntil);
+
+  console.log(
+    `PAUSA MANUAL: respuestas automáticas suspendidas para ${phone} hasta ${new Date(pauseUntil).toISOString()}`
+  );
+}
+
+function isCustomerPaused(phone) {
+  const pauseUntil = manualPauses.get(phone);
+
+  if (!pauseUntil) return false;
+
+  if (Date.now() >= pauseUntil) {
+    manualPauses.delete(phone);
+    console.log(`PAUSA FINALIZADA para ${phone}. El bot vuelve a responder.`);
+    return false;
+  }
+
+  return true;
+}
+
+function processManualMessageEchoes(change) {
+  if (change.field !== "smb_message_echoes") return;
+
+  const echoes = change.value?.message_echoes || [];
+
+  for (const echo of echoes) {
+    const recipient = Array.isArray(echo.to) ? echo.to[0] : echo.to;
+
+    if (!recipient) {
+      console.log("Echo manual recibido sin destinatario:", echo);
+      continue;
+    }
+
+    if (echo.id && processedEchoes.has(echo.id)) continue;
+
+    if (echo.id) processedEchoes.set(echo.id, Date.now());
+
+    pauseCustomer(recipient);
+  }
+}
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [phone, pauseUntil] of manualPauses.entries()) {
+    if (now >= pauseUntil) {
+      manualPauses.delete(phone);
+      console.log(`Pausa eliminada para ${phone}.`);
+    }
+  }
+
+  for (const [id, timestamp] of processedEchoes.entries()) {
+    if (now - timestamp > 60 * 60 * 1000) {
+      processedEchoes.delete(id);
+    }
+  }
+}, 60 * 1000);
+
+// VERIFICACIÓN DEL WEBHOOK
+
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -409,15 +510,26 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-// Recepción de mensajes de WhatsApp
+// RECEPCIÓN DE MENSAJES
+
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 
   const body = req.body;
+
   if (body.object !== "whatsapp_business_account") return;
 
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
+
+      // Mensajes enviados manualmente desde WhatsApp Business.
+      if (change.field === "smb_message_echoes") {
+        processManualMessageEchoes(change);
+        continue;
+      }
+
+      if (change.field !== "messages") continue;
+
       const messages = change.value?.messages || [];
 
       for (const message of messages) {
@@ -425,9 +537,16 @@ app.post("/webhook", (req, res) => {
 
         const from = message.from;
         const text = (message.text?.body || "").trim();
-        if (!text) continue;
+
+        if (!from || !text) continue;
 
         console.log("Mensaje recibido de:", from, text);
+
+        // No responder mientras el cliente esté en pausa manual.
+        if (isCustomerPaused(from)) {
+          console.log(`BOT EN PAUSA: mensaje de ${from} ignorado.`);
+          continue;
+        }
 
         if (["menu", "menú"].includes(text.toLowerCase())) {
           salesSessions.delete(from);
@@ -449,6 +568,7 @@ app.post("/webhook", (req, res) => {
 
         if (fixedReply) {
           if (text === "5") startSales(from);
+
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", fixedReply);
           sendWhatsAppMessage(from, fixedReply).catch(console.error);
@@ -457,10 +577,14 @@ app.post("/webhook", (req, res) => {
 
         getAIReply(from, text)
           .then(async reply => {
-            // Si la IA detecta intención de contratación, el proceso se activa
-            // en el siguiente mensaje con la pregunta de localidad.
-            const lowerReply = reply.toLowerCase();
+            // Comprobar nuevamente antes de enviar la respuesta.
+            if (isCustomerPaused(from)) {
+              console.log(`RESPUESTA CANCELADA: ${from} está en pausa manual.`);
+              return;
+            }
+
             const lowerMessage = text.toLowerCase();
+
             const salesIntent =
               /contratar|quiero internet|me interesa|quiero el servicio|darme de alta/.test(lowerMessage);
 
@@ -478,6 +602,8 @@ app.post("/webhook", (req, res) => {
   }
 });
 
+// RUTAS DE LA APLICACIÓN
+
 app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -489,7 +615,8 @@ app.get("/health", (_req, res) => {
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
-    conversationMemory: "temporary"
+    conversationMemory: "temporary",
+    manualCustomerPause: "30 minutes"
   });
 });
 
