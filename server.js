@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -27,6 +28,7 @@ const ROUTER_IMAGE_URL =
 // MEMORIA Y SESIONES
 const conversations = new Map();
 const salesSessions = new Map();
+const salesOffers = new Map();
 const guideSessions = new Map();
 const guideOffers = new Map();
 
@@ -168,6 +170,15 @@ function getConversation(phone) {
   return session;
 }
 
+function sessionTextForSales(phone, currentMessage) {
+  const session = getConversation(phone);
+
+  return [
+    ...session.messages.map(item => item.content || ""),
+    currentMessage || ""
+  ].join(" ");
+}
+
 function saveConversation(phone, role, content) {
   const session = getConversation(phone);
 
@@ -278,6 +289,7 @@ async function sendWhatsAppImage(to, imageUrl, caption) {
 // GUÍA DE CONEXIÓN PASO A PASO
 async function startConnectionGuide(phone) {
   guideOffers.delete(phone);
+
   guideSessions.set(phone, {
     step: "poe",
     updatedAt: Date.now()
@@ -319,10 +331,12 @@ async function handleConnectionGuide(phone, message) {
 
   if (answer === "cancelar") {
     guideSessions.delete(phone);
+
     await sendWhatsAppMessage(
       phone,
       "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
     );
+
     return true;
   }
 
@@ -331,6 +345,7 @@ async function handleConnectionGuide(phone, message) {
       phone,
       "Para continuar con la guía, responde *SI*. Si deseas detenerla, escribe *CANCELAR*."
     );
+
     return true;
   }
 
@@ -340,6 +355,7 @@ async function handleConnectionGuide(phone, message) {
         phone,
         "No hay problema. Cuando hayas identificado el adaptador PoE y sus dos cables, responde *SI* para continuar."
       );
+
       return true;
     }
 
@@ -381,6 +397,7 @@ Cuando termines, responde *SI* para revisar el router.`
         phone,
         "Está bien. Termina de conectar correctamente los cables del adaptador PoE. Cuando estés listo, responde *SI*."
       );
+
       return true;
     }
 
@@ -417,6 +434,7 @@ Cuando termines, responde *SI* para continuar.`
         phone,
         "No hay problema. Revisa que el cable del router esté conectado nuevamente en el mismo puerto WAN. Cuando termines, responde *SI*."
       );
+
       return true;
     }
 
@@ -606,12 +624,87 @@ function getInstallationFee(locality) {
   return null;
 }
 
+// DETECTAR LOCALIDADES MENCIONADAS
+function getMentionedLocalities(text) {
+  const normalized = normalize(text);
+  const found = [];
+
+  if (normalized.includes("la libertad")) {
+    found.push("La Libertad, Chiapas");
+  }
+
+  if (normalized.includes("emiliano zapata")) {
+    found.push("Emiliano Zapata, Tabasco");
+  }
+
+  if (
+    normalized.includes("ejido morelos") ||
+    normalized.includes("morelos")
+  ) {
+    found.push("Ejido Morelos");
+  }
+
+  return [...new Set(found)];
+}
+
+// PROCESAR ACEPTACIÓN DE CONTRATACIÓN
+function handleSalesOfferAcceptance(phone, message) {
+  const offer = salesOffers.get(phone);
+
+  if (!offer) return null;
+
+  const normalized = normalize(message);
+
+  const isAcceptance =
+    isYes(message) ||
+    /\b(600|800|1200)\b/.test(normalized) ||
+    /contrat|instalacion|instalar|en la libertad|emiliano zapata|morelos/.test(
+      normalized
+    );
+
+  if (!isAcceptance) return null;
+
+  const mentioned = getMentionedLocalities(message);
+  let locality = mentioned.length === 1 ? mentioned[0] : "";
+
+  if (!locality && offer.localities.length === 1) {
+    locality = offer.localities[0];
+  }
+
+  salesOffers.delete(phone);
+
+  if (!locality) {
+    startSales(phone);
+
+    return "¡Con gusto te ayudamos con la contratación! Primero, ¿en qué localidad deseas instalar el servicio?";
+  }
+
+  salesSessions.set(phone, {
+    step: "name",
+    locality,
+    name: "",
+    address: "",
+    updatedAt: Date.now()
+  });
+
+  const fee = getInstallationFee(locality);
+
+  const feeText = fee !== null
+    ? `El costo de instalación en ${locality} es de $${fee} MXN.`
+    : "Un técnico debe confirmar la cobertura y el costo de instalación.";
+
+  return `${feeText}
+
+Para continuar con tu contratación, ¿me compartes tu nombre completo?`;
+}
+
 function handleSales(phone, message) {
   const text = message.trim();
   const session = salesSessions.get(phone);
 
   if (normalize(text) === "cancelar") {
     salesSessions.delete(phone);
+
     return "De acuerdo, hemos detenido la solicitud. Si necesitas ayuda, escribe MENU.";
   }
 
@@ -630,6 +723,7 @@ function handleSales(phone, message) {
     session.step = "name";
 
     const fee = getInstallationFee(text);
+
     const feeText = fee !== null
       ? `El costo de instalación registrado es de $${fee} MXN.`
       : "Un técnico debe confirmar primero la cobertura y el costo de instalación.";
@@ -660,6 +754,7 @@ Ahora compárteme tu dirección, colonia, calle o una referencia de ubicación.`
     session.address = text;
 
     const fee = getInstallationFee(session.locality);
+
     const feeText = fee !== null
       ? `Costo de instalación registrado: $${fee} MXN.`
       : "Costo de instalación pendiente de confirmación.";
@@ -750,6 +845,7 @@ REGLAS:
 
     if (!response.ok) {
       console.error("ERROR OPENAI:", result);
+
       return "En este momento tengo dificultades para responder. Escribe MENU o TECNICO.";
     }
 
@@ -771,6 +867,7 @@ REGLAS:
     return answer.slice(0, 3500);
   } catch (error) {
     console.error("ERROR CONSULTANDO OPENAI:", error);
+
     return "En este momento no puedo responder esa consulta. Inténtalo nuevamente o escribe TECNICO.";
   }
 }
@@ -799,6 +896,7 @@ function isCustomerPaused(phone) {
     persistManualPauses();
 
     console.log(`PAUSA FINALIZADA para ${phone}.`);
+
     return false;
   }
 
@@ -840,6 +938,7 @@ setInterval(() => {
     if (now >= pauseUntil) {
       manualPauses.delete(phone);
       pausesChanged = true;
+
       console.log(`Pausa eliminada para ${phone}.`);
     }
   }
@@ -863,6 +962,12 @@ setInterval(() => {
       salesSessions.delete(phone);
     }
   }
+
+  for (const [phone, offer] of salesOffers.entries()) {
+    if (now - offer.updatedAt > SESSION_TTL) {
+      salesOffers.delete(phone);
+    }
+  }
 }, 60 * 1000);
 
 // VERIFICACIÓN WEBHOOK
@@ -873,6 +978,7 @@ app.get("/webhook", (req, res) => {
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     console.log("Webhook verificado correctamente.");
+
     return res.status(200).send(challenge);
   }
 
@@ -889,7 +995,6 @@ app.post("/webhook", (req, res) => {
 
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
-
       if (change.field === "smb_message_echoes") {
         processManualMessageEchoes(change);
         continue;
@@ -921,6 +1026,7 @@ app.post("/webhook", (req, res) => {
           guideSessions.delete(from);
           guideOffers.delete(from);
           salesSessions.delete(from);
+          salesOffers.delete(from);
           conversations.delete(from);
 
           sendWhatsAppMessage(from, mainMenu()).catch(console.error);
@@ -942,12 +1048,25 @@ app.post("/webhook", (req, res) => {
 
           if (isNo(text)) {
             guideOffers.delete(from);
+
             sendWhatsAppMessage(
               from,
               "De acuerdo. Si necesitas revisar tu conexión, escribe MENU y selecciona la opción 1."
             ).catch(console.error);
+
             continue;
           }
+        }
+
+        // ACEPTACIÓN DE UNA OFERTA DE CONTRATACIÓN GENERADA POR LA IA
+        const offerReply = handleSalesOfferAcceptance(from, text);
+
+        if (offerReply) {
+          saveConversation(from, "user", text);
+          saveConversation(from, "assistant", offerReply);
+
+          sendWhatsAppMessage(from, offerReply).catch(console.error);
+          continue;
         }
 
         // OPCIÓN 1: INICIAR GUÍA PASO A PASO
@@ -962,6 +1081,7 @@ app.post("/webhook", (req, res) => {
         if (salesReply) {
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", salesReply);
+
           sendWhatsAppMessage(from, salesReply).catch(console.error);
           continue;
         }
@@ -974,6 +1094,7 @@ app.post("/webhook", (req, res) => {
 
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", fixedReply);
+
           sendWhatsAppMessage(from, fixedReply).catch(console.error);
           continue;
         }
@@ -995,11 +1116,29 @@ app.post("/webhook", (req, res) => {
 
             if (salesIntent && !salesSessions.has(from)) {
               startSales(from);
-              reply = "¡Con gusto te ayudamos a contratar! Primero, ¿en qué localidad vives?";
+
+              reply =
+                "¡Con gusto te ayudamos a contratar! Primero, ¿en qué localidad vives?";
+
               saveConversation(from, "assistant", reply);
             }
 
-            // Detecta cuando la IA ofrece una guía de conexión.
+            // GUARDAR OFERTA DE CONTRATACIÓN Y LOCALIDADES DEL CONTEXTO
+            const offersSales =
+              /contrat|ayude con la contratacion|ayudarte con la contratacion/.test(
+                normalize(reply)
+              );
+
+            if (offersSales) {
+              const historyText = sessionTextForSales(from, text);
+
+              salesOffers.set(from, {
+                localities: getMentionedLocalities(historyText),
+                updatedAt: Date.now()
+              });
+            }
+
+            // DETECTAR OFERTA DE GUÍA DE CONEXIÓN
             const offersGuide =
               /guia rapida|guia para revisar|revisar los cables|revisar las conexiones|guia visual/.test(
                 normalize(reply)
