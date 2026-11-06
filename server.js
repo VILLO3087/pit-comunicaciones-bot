@@ -1,4 +1,3 @@
-
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -18,22 +17,23 @@ const API_VERSION = process.env.GRAPH_API_VERSION || "v25.0";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
+// IMÁGENES
 const POE_IMAGE_URL =
   "https://raw.githubusercontent.com/VILLO3087/pit-comunicaciones-bot/main/poe.jpg";
+
 const ROUTER_IMAGE_URL =
   "https://raw.githubusercontent.com/VILLO3087/pit-comunicaciones-bot/main/router.jpg";
 
-// MEMORIA
+// MEMORIA Y SESIONES
 const conversations = new Map();
 const salesSessions = new Map();
+const guideSessions = new Map();
+const guideOffers = new Map();
+
 const MEMORY_LIMIT = 12;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 
-// ESTADOS DE CONVERSACIÓN
-const awaitingGuide = new Map();
-const guideCompleted = new Set();
-
-// PAUSAS MANUALES PERSISTENTES
+// PAUSA MANUAL PERSISTENTE
 const manualPauses = new Map();
 const processedEchoes = new Map();
 const MANUAL_PAUSE_DURATION = 30 * 60 * 1000;
@@ -49,6 +49,7 @@ async function persistManualPauses() {
   pauseWriteQueue = pauseWriteQueue
     .then(async () => {
       await fs.promises.mkdir(DATA_DIR, { recursive: true });
+
       const tempFile = `${PAUSES_FILE}.tmp`;
 
       await fs.promises.writeFile(
@@ -59,7 +60,9 @@ async function persistManualPauses() {
 
       await fs.promises.rename(tempFile, PAUSES_FILE);
     })
-    .catch(error => console.error("ERROR GUARDANDO PAUSAS:", error));
+    .catch(error => {
+      console.error("ERROR GUARDANDO PAUSAS:", error);
+    });
 
   return pauseWriteQueue;
 }
@@ -82,18 +85,19 @@ async function loadManualPauses() {
       }
     }
 
-    console.log("PAUSAS RECUPERADAS:", manualPauses.size);
+    console.log(`PAUSAS RECUPERADAS: ${manualPauses.size}`);
 
     if (manualPauses.size !== Object.keys(savedPauses).length) {
       await persistManualPauses();
     }
   } catch (error) {
     if (error.code === "ENOENT") {
-      console.log("Creando archivo inicial de pausas.");
+      console.log("Creando archivo de pausas.");
       await persistManualPauses();
-    } else {
-      throw error;
+      return;
     }
+
+    throw error;
   }
 }
 
@@ -106,14 +110,18 @@ const businessInfo = {
     uploadMbps: 10,
     monthlyPriceMXN: 350,
     unlimitedNavigation: true,
-    devices: "Sin cantidad máxima fija. La velocidad se comparte entre los dispositivos."
+    devices: "Sin cantidad máxima fija; la velocidad se comparte."
   },
   installation: [
     { locality: "La Libertad, Chiapas", feeMXN: 600 },
     { locality: "Emiliano Zapata, Tabasco", feeMXN: 800 },
     { locality: "Ejido Morelos", feeMXN: 1200 }
   ],
-  paymentMethods: ["Efectivo", "Transferencia bancaria", "Depósito en OXXO"],
+  paymentMethods: [
+    "Efectivo",
+    "Transferencia bancaria",
+    "Depósito en OXXO"
+  ],
   supportHours: {
     mondayToFriday: "07:00 a 18:00",
     saturday: "07:00 a 14:00",
@@ -121,13 +129,39 @@ const businessInfo = {
   }
 };
 
-// MEMORIA DE CONVERSACIONES
+// UTILIDADES
+function normalize(text) {
+  return String(text || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isYes(text) {
+  return /^(si|sí|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya)$/.test(
+    normalize(text)
+  );
+}
+
+function isNo(text) {
+  return /^(no|nop|negativo|todavia no|aun no|aún no)$/.test(
+    normalize(text)
+  );
+}
+
+// MEMORIA
 function getConversation(phone) {
-  let session = conversations.get(phone);
+  const session = conversations.get(phone);
 
   if (!session || Date.now() - session.updatedAt > SESSION_TTL) {
-    session = { messages: [], updatedAt: Date.now() };
-    conversations.set(phone, session);
+    const fresh = {
+      messages: [],
+      updatedAt: Date.now()
+    };
+
+    conversations.set(phone, fresh);
+    return fresh;
   }
 
   session.updatedAt = Date.now();
@@ -136,30 +170,31 @@ function getConversation(phone) {
 
 function saveConversation(phone, role, content) {
   const session = getConversation(phone);
+
   session.messages.push({ role, content });
   session.messages = session.messages.slice(-MEMORY_LIMIT);
   session.updatedAt = Date.now();
 }
 
-// MENÚ PRINCIPAL
+// MENÚ
 function mainMenu() {
   return `📡 *PIT COMUNICACIONES*
 
 ¡Hola! 👋 Bienvenido.
 
-Estamos para ayudarte. ¿Qué servicio necesitas hoy?
+¿En qué podemos ayudarte?
 
 📋 *MENÚ DE ATENCIÓN*
 
 1️⃣ 📡 No tengo Internet.
 2️⃣ 🐢 Mi Internet está lento.
 3️⃣ 💳 Información sobre pagos.
-4️⃣ 🚀 Consultar planes y precios.
-5️⃣ 🏠 ¡Quiero contratar Internet!
-6️⃣ 📍 Cobertura y horarios de atención.
+4️⃣ 🚀 Planes y precios.
+5️⃣ 🏠 Quiero contratar Internet.
+6️⃣ 📍 Cobertura y horarios.
 7️⃣ 👨‍🔧 Hablar con un técnico.
 
-✍️ Escribe el número de la opción que necesitas.
+✍️ Escribe el número de la opción.
 
 💙 *PIT COMUNICACIONES*
 Conectando contigo.`;
@@ -168,7 +203,7 @@ Conectando contigo.`;
 // ENVÍO DE TEXTO
 async function sendWhatsAppMessage(to, message) {
   if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
-    console.error("FALTAN VARIABLES DE WHATSAPP.");
+    console.error("Faltan variables de WhatsApp.");
     return false;
   }
 
@@ -197,12 +232,17 @@ async function sendWhatsAppMessage(to, message) {
     return false;
   }
 
-  console.log("TEXTO ENVIADO A:", to);
+  console.log("Texto enviado a:", to);
   return true;
 }
 
-// ENVÍO DE FOTOGRAFÍAS
+// ENVÍO DE IMÁGENES
 async function sendWhatsAppImage(to, imageUrl, caption) {
+  if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
+    console.error("Faltan variables de WhatsApp.");
+    return false;
+  }
+
   const url =
     `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
 
@@ -217,7 +257,10 @@ async function sendWhatsAppImage(to, imageUrl, caption) {
       recipient_type: "individual",
       to,
       type: "image",
-      image: { link: imageUrl, caption }
+      image: {
+        link: imageUrl,
+        caption
+      }
     })
   });
 
@@ -228,96 +271,231 @@ async function sendWhatsAppImage(to, imageUrl, caption) {
     return false;
   }
 
-  console.log("IMAGEN ENVIADA A:", to);
+  console.log("Imagen enviada a:", to);
   return true;
 }
 
-// GUÍA VISUAL DE CONEXIÓN
-async function sendNoInternetGuide(to) {
-  guideCompleted.delete(to);
-
-  console.log("INICIANDO GUÍA VISUAL PARA:", to);
+// GUÍA DE CONEXIÓN PASO A PASO
+async function startConnectionGuide(phone) {
+  guideOffers.delete(phone);
+  guideSessions.set(phone, {
+    step: "poe",
+    updatedAt: Date.now()
+  });
 
   await sendWhatsAppMessage(
-    to,
+    phone,
     `📡 *VAMOS A REVISAR TU CONEXIÓN*
 
-Te guiaremos paso a paso. Primero identifica el adaptador PoE de tu instalación. Observa la fotografía.`
+Te ayudaré paso a paso.
+
+Primero revisaremos el adaptador PoE de tu instalación.
+
+Observa la siguiente fotografía. No desconectes nada todavía.`
   );
 
   await sendWhatsAppImage(
-    to,
+    phone,
     POE_IMAGE_URL,
     `🔌 *PASO 1. ADAPTADOR PoE*
 
 Identifica los dos cables de red:
 
-⚫ *Cable negro:* está conectado en el puerto que dice *POE*. Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+⚫ *Cable negro:* conectado en el puerto que dice *POE*.
 
-⚪ *Cable gris:* está conectado en el puerto que dice *LAN*. Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+⚪ *Cable gris:* conectado en el puerto que dice *LAN*.
 
-🚨 NO INTERCAMBIES LOS CABLES.
-El negro regresa a POE y el gris regresa a LAN.
-
-No cambies ninguno de los cables de posición.`
+Cuando hayas identificado ambos cables, responde *SI* para continuar.`
   );
+}
 
-  await sendWhatsAppMessage(
-    to,
-    `Ahora vamos a revisar el router WiFi. Observa la fotografía e identifica el puerto WAN.`
-  );
+// CONTROL DE LA GUÍA
+async function handleConnectionGuide(phone, message) {
+  const session = guideSessions.get(phone);
 
-  await sendWhatsAppImage(
-    to,
-    ROUTER_IMAGE_URL,
-    `📶 *PASO 2. ROUTER WiFi*
+  if (!session) return false;
 
-Localiza el cable de red conectado en el puerto que dice *WAN*.
+  const answer = normalize(message);
+
+  if (answer === "cancelar") {
+    guideSessions.delete(phone);
+    await sendWhatsAppMessage(
+      phone,
+      "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
+    );
+    return true;
+  }
+
+  if (!isYes(message) && !isNo(message)) {
+    await sendWhatsAppMessage(
+      phone,
+      "Para continuar con la guía, responde *SI*. Si deseas detenerla, escribe *CANCELAR*."
+    );
+    return true;
+  }
+
+  if (session.step === "poe") {
+    if (isNo(message)) {
+      await sendWhatsAppMessage(
+        phone,
+        "No hay problema. Cuando hayas identificado el adaptador PoE y sus dos cables, responde *SI* para continuar."
+      );
+      return true;
+    }
+
+    session.step = "router";
+    session.updatedAt = Date.now();
+
+    await sendWhatsAppMessage(
+      phone,
+      `🔌 *PASO 2. CONEXIONES DEL ADAPTADOR PoE*
+
+Ahora revisaremos los dos cables de red del adaptador.
+
+⚫ *CABLE NEGRO:*
+Está conectado en el puerto que dice *POE*.
+
+Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+
+⚪ *CABLE GRIS:*
+Está conectado en el puerto que dice *LAN*.
+
+Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+
+🚨 *MUY IMPORTANTE*
+
+❌ No intercambies los cables.
+❌ El negro regresa a POE.
+❌ El gris regresa a LAN.
+❌ No cambies los cables de posición.
+
+Cuando termines, responde *SI* para revisar el router.`
+    );
+
+    return true;
+  }
+
+  if (session.step === "router") {
+    if (isNo(message)) {
+      await sendWhatsAppMessage(
+        phone,
+        "Está bien. Termina de conectar correctamente los cables del adaptador PoE. Cuando estés listo, responde *SI*."
+      );
+      return true;
+    }
+
+    session.step = "wait";
+    session.updatedAt = Date.now();
+
+    await sendWhatsAppMessage(
+      phone,
+      `📶 *PASO 3. ROUTER WiFi*
+
+Observa la fotografía e identifica el cable de red conectado en el puerto que dice *WAN*.
 
 Desconecta ese cable y vuelve a conectarlo en ESE MISMO PUERTO WAN.
 
 ⚠️ No lo conectes en ningún otro puerto del router.
 
-❌ No presiones el botón RESET.`
-  );
+❌ No presiones el botón RESET.
 
-  await sendWhatsAppMessage(
-    to,
-    `⏱️ *PASO 3. ESPERA Y COMPROBACIÓN*
+Cuando termines, responde *SI* para continuar.`
+    );
 
-Verifica lo siguiente:
+    await sendWhatsAppImage(
+      phone,
+      ROUTER_IMAGE_URL,
+      "📶 *Identifica el puerto WAN de tu router.* Desconecta y vuelve a conectar el cable en ese mismo puerto."
+    );
 
-1️⃣ Cable negro conectado en POE.
-2️⃣ Cable gris conectado en LAN.
-3️⃣ Cable de red del router conectado en WAN.
+    return true;
+  }
+
+  if (session.step === "wait") {
+    if (isNo(message)) {
+      await sendWhatsAppMessage(
+        phone,
+        "No hay problema. Revisa que el cable del router esté conectado nuevamente en el mismo puerto WAN. Cuando termines, responde *SI*."
+      );
+      return true;
+    }
+
+    session.step = "confirmation";
+    session.updatedAt = Date.now();
+
+    await sendWhatsAppMessage(
+      phone,
+      `⏱️ *PASO 4. ESPERA Y COMPROBACIÓN*
+
+Verifica que las conexiones estén en su lugar:
+
+1️⃣ Cable negro conectado en *POE*.
+2️⃣ Cable gris conectado en *LAN*.
+3️⃣ Cable del router conectado en *WAN*.
 
 Espera de 3 a 5 minutos para que los equipos restablezcan la conexión.
 
-🚨 *MUY IMPORTANTE*
+🚨 *RECUERDA*
 
 ❌ No presiones RESET.
 ❌ No intercambies los cables POE y LAN.
 ❌ No conectes el cable WAN en otro puerto.
 ❌ No manipules la antena ni el cableado exterior.
 
-*¿Ya tienes Internet nuevamente?*
+Después de esperar, responde *SI* si ya tienes Internet o *NO* si todavía no tienes servicio.`
+    );
 
-Responde:
-✅ *SI* — Si ya tienes servicio.
-❌ *NO* — Si todavía no tienes Internet.
+    return true;
+  }
+
+  if (session.step === "confirmation") {
+    if (isYes(message)) {
+      guideSessions.delete(phone);
+
+      await sendWhatsAppMessage(
+        phone,
+        `✅ ¡Excelente! Nos alegra que tu servicio de Internet haya regresado.
+
+Gracias por seguir los pasos.
+
+💙 *PIT COMUNICACIONES*
+Conectando contigo.`
+      );
+
+      return true;
+    }
+
+    guideSessions.delete(phone);
+
+    await sendWhatsAppMessage(
+      phone,
+      `👨‍🔧 *NECESITAMOS AYUDARTE*
+
+Si después de realizar los pasos sigues sin Internet, vamos a solicitar atención técnica.
+
+Por favor, envíanos:
+
+1️⃣ Nombre completo.
+2️⃣ Localidad.
+3️⃣ Número de teléfono de contacto.
+4️⃣ Confírmanos que sigues sin Internet.
+
+Un técnico deberá revisar tu reporte.
 
 💙 *PIT COMUNICACIONES*`
-  );
+    );
 
-  guideCompleted.add(to);
-  console.log("GUÍA FINALIZADA PARA:", to);
+    return true;
+  }
+
+  return false;
 }
 
-// RESPUESTAS FIJAS DEL MENÚ
+// RESPUESTAS DEL MENÚ
 function getMenuReply(message) {
-  const option = message.trim().toLowerCase();
+  const option = normalize(message);
 
-  if (["hola", "buenas", "inicio", "menú", "menu"].includes(option)) {
+  if (["hola", "buenas", "inicio", "menu"].includes(option)) {
     return mainMenu();
   }
 
@@ -331,11 +509,13 @@ function getMenuReply(message) {
 Vamos a revisar tu conexión.
 
 1. Acércate al router.
-2. Revisa que los cables estén conectados correctamente.
-3. No cambies los cables de puerto.
-4. Si el problema continúa, escribe TECNICO.
+2. Comprueba que los cables estén conectados.
+3. Reinicia únicamente el router desconectando su alimentación eléctrica durante 30 segundos.
+4. Conéctalo nuevamente y espera de 3 a 5 minutos.
 
-No presiones RESET ni manipules la antena o el cableado exterior.`;
+No presiones el botón RESET.
+
+Si continúa lento, escribe *TECNICO*.`;
 
     case "3":
       return `💳 *INFORMACIÓN DE PAGOS*
@@ -361,7 +541,7 @@ Si realizas un pago, envíanos tu nombre completo y una fotografía del comproba
 
 La velocidad se comparte entre los dispositivos conectados.
 
-¿Te gustaría contratar? Escribe 5.`;
+¿Te gustaría contratar? Escribe *5*.`;
 
     case "5":
       return `🏠 *¡QUEREMOS LLEVAR INTERNET HASTA TU HOGAR!*
@@ -370,6 +550,8 @@ Primero, ¿en qué localidad vives?`;
 
     case "6":
       return `📍 *COBERTURA Y HORARIOS*
+
+🕒 HORARIOS DE ATENCIÓN TÉCNICA
 
 Lunes a viernes: 07:00 a 18:00.
 Sábados: 07:00 a 14:00.
@@ -385,8 +567,9 @@ En otras comunidades debemos verificar cobertura y costo.`;
 
     case "7":
     case "tecnico":
-    case "técnico":
       return `👨‍🔧 *ATENCIÓN TÉCNICA*
+
+Con gusto te ayudaremos.
 
 Para solicitar atención, envíanos:
 
@@ -414,7 +597,7 @@ function startSales(phone) {
 }
 
 function getInstallationFee(locality) {
-  const normalized = locality.toLowerCase();
+  const normalized = normalize(locality);
 
   if (normalized.includes("la libertad")) return 600;
   if (normalized.includes("emiliano zapata")) return 800;
@@ -425,10 +608,9 @@ function getInstallationFee(locality) {
 
 function handleSales(phone, message) {
   const text = message.trim();
-  const lower = text.toLowerCase();
   const session = salesSessions.get(phone);
 
-  if (lower === "cancelar") {
+  if (normalize(text) === "cancelar") {
     salesSessions.delete(phone);
     return "De acuerdo, hemos detenido la solicitud. Si necesitas ayuda, escribe MENU.";
   }
@@ -482,15 +664,18 @@ Ahora compárteme tu dirección, colonia, calle o una referencia de ubicación.`
       ? `Costo de instalación registrado: $${fee} MXN.`
       : "Costo de instalación pendiente de confirmación.";
 
-    console.log(`NUEVA SOLICITUD PIT:
+    const summary = `SOLICITUD DE CONTRATACIÓN PIT COMUNICACIONES
+
 Nombre: ${session.name}
 Teléfono: ${phone}
 Localidad: ${session.locality}
 Dirección: ${session.address}
-Plan: Familiar 25/10 Mbps.
+Plan: Familiar 25 Mbps / 10 Mbps.
 Mensualidad: $350 MXN.
 ${feeText}
-Estado: Pendiente de revisión.`);
+Estado: Pendiente de revisión.`;
+
+    console.log("NUEVA SOLICITUD:\n" + summary);
 
     salesSessions.delete(phone);
 
@@ -502,9 +687,7 @@ ${feeText}
 
 Nuestro equipo deberá revisar la cobertura y ponerse en contacto contigo.
 
-Tu solicitud todavía no representa una instalación confirmada.
-
-Si necesitas algo más, escribe MENU.`;
+Tu solicitud todavía no representa una instalación confirmada.`;
   }
 
   return null;
@@ -513,7 +696,7 @@ Si necesitas algo más, escribe MENU.`;
 // INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
   if (!OPENAI_API_KEY) {
-    return "Por el momento no puedo responder automáticamente. Escribe MENU o TECNICO.";
+    return "Por el momento no puedo responder esa consulta. Escribe MENU para ver las opciones o TECNICO para solicitar atención.";
   }
 
   const session = getConversation(phone);
@@ -524,26 +707,24 @@ INFORMACIÓN OFICIAL:
 ${JSON.stringify(businessInfo)}
 
 REGLAS:
-- Responde en español mexicano, amable, natural y breve.
+- Responde en español mexicano, de forma amable, natural y breve.
 - Mantén el contexto de la conversación.
-- El plan cuesta $350 MXN mensuales e incluye 25 Mbps de bajada y 10 Mbps de subida.
-- No tiene límite de navegación. La velocidad se comparte entre dispositivos.
-- No inventes otros planes, precios, promociones, cobertura ni fechas.
-- Instalación: La Libertad $600; Emiliano Zapata $800; Ejido Morelos $1,200.
+- El Plan Familiar cuesta $350 MXN al mes e incluye 25 Mbps de bajada y 10 Mbps de subida.
+- No tiene límite de navegación.
+- El cliente puede conectar los dispositivos que necesite. La velocidad se comparte.
+- No inventes planes, precios, promociones, cobertura ni fechas.
+- Instalación: La Libertad $600, Emiliano Zapata $800, Ejido Morelos $1,200.
 - En otras localidades un técnico debe confirmar cobertura y costo.
-- Si el cliente quiere contratar, pregunta localidad, después nombre completo y dirección, uno por uno.
+- Si el cliente quiere contratar, pregunta primero su localidad. Después solicita nombre completo y dirección, paso a paso.
 - No confirmes instalaciones ni pagos.
 - Métodos de pago: efectivo, transferencia y depósito OXXO.
 - Para fallas persistentes solicita nombre, localidad, teléfono y descripción.
-- Si el cliente no tiene Internet, ofrece la guía visual.
-- La guía visual debe respetar estas instrucciones: cable negro en POE, cable gris en LAN. Se desconectan y vuelven a conectar en sus mismos puertos, sin intercambiarlos.
-- En el router, el cable de red se desconecta y vuelve a conectar en el mismo puerto WAN.
-- Nunca indiques presionar RESET, cambiar cables de puerto ni manipular antena o cableado exterior.
-- Si preguntas al cliente si desea recibir la guía, espera su respuesta. Si responde afirmativamente, se le enviará la guía completa.
-- No interpretes un sí como confirmación de que ya regresó Internet, salvo que el cliente ya haya recibido la guía y se le haya preguntado expresamente si recuperó el servicio.
-- Nunca solicites contraseñas, códigos ni datos completos de tarjetas.
+- Nunca solicites contraseñas, códigos ni datos de tarjetas.
+- Si el cliente pregunta si puedes compartir una guía rápida para revisar cables, puedes ofrecerla.
+- Si el cliente acepta una guía, responde brevemente. El sistema enviará la guía paso a paso.
+- Nunca indiques presionar RESET, intercambiar cables POE/LAN ni manipular antena o cableado exterior.
 - Si no tienes certeza, dilo y deriva con un técnico.
-- Sólo puedes ayudar con los servicios de PIT COMUNICACIONES.`;
+- No respondas consultas ajenas a PIT COMUNICACIONES.`;
 
   try {
     const response = await fetch("https://api.openai.com/v1/responses", {
@@ -590,19 +771,22 @@ REGLAS:
     return answer.slice(0, 3500);
   } catch (error) {
     console.error("ERROR CONSULTANDO OPENAI:", error);
-    return "En este momento no puedo responder. Inténtalo nuevamente o escribe TECNICO.";
+    return "En este momento no puedo responder esa consulta. Inténtalo nuevamente o escribe TECNICO.";
   }
 }
 
-// PAUSAS MANUALES
+// PAUSA MANUAL
 function pauseCustomer(phone) {
   if (!phone) return;
 
   const pauseUntil = Date.now() + MANUAL_PAUSE_DURATION;
+
   manualPauses.set(phone, pauseUntil);
   persistManualPauses();
 
-  console.log(`PAUSA MANUAL ACTIVADA PARA ${phone}`);
+  console.log(
+    `PAUSA MANUAL para ${phone} hasta ${new Date(pauseUntil).toISOString()}`
+  );
 }
 
 function isCustomerPaused(phone) {
@@ -613,7 +797,8 @@ function isCustomerPaused(phone) {
   if (Date.now() >= pauseUntil) {
     manualPauses.delete(phone);
     persistManualPauses();
-    console.log(`PAUSA FINALIZADA PARA ${phone}`);
+
+    console.log(`PAUSA FINALIZADA para ${phone}.`);
     return false;
   }
 
@@ -625,10 +810,11 @@ function processManualMessageEchoes(change) {
   if (change.field !== "smb_message_echoes") return;
 
   const echoes = change.value?.message_echoes || [];
-  console.log("EVENTO SMB_MESSAGE_ECHOES RECIBIDO.");
 
   for (const echo of echoes) {
-    const recipient = Array.isArray(echo.to) ? echo.to[0] : echo.to;
+    const recipient = Array.isArray(echo.to)
+      ? echo.to[0]
+      : echo.to;
 
     if (!recipient) {
       console.log("ECHO SIN DESTINATARIO:", JSON.stringify(echo));
@@ -636,30 +822,45 @@ function processManualMessageEchoes(change) {
     }
 
     if (echo.id && processedEchoes.has(echo.id)) continue;
-    if (echo.id) processedEchoes.set(echo.id, Date.now());
+
+    if (echo.id) {
+      processedEchoes.set(echo.id, Date.now());
+    }
 
     pauseCustomer(recipient);
   }
 }
 
-// LIMPIEZA AUTOMÁTICA
+// LIMPIEZA
 setInterval(() => {
   const now = Date.now();
-  let changed = false;
+  let pausesChanged = false;
 
   for (const [phone, pauseUntil] of manualPauses.entries()) {
     if (now >= pauseUntil) {
       manualPauses.delete(phone);
-      changed = true;
-      console.log("PAUSA FINALIZADA:", phone);
+      pausesChanged = true;
+      console.log(`Pausa eliminada para ${phone}.`);
     }
   }
 
-  if (changed) persistManualPauses();
+  if (pausesChanged) persistManualPauses();
 
   for (const [id, timestamp] of processedEchoes.entries()) {
     if (now - timestamp > 60 * 60 * 1000) {
       processedEchoes.delete(id);
+    }
+  }
+
+  for (const [phone, session] of guideSessions.entries()) {
+    if (now - session.updatedAt > SESSION_TTL) {
+      guideSessions.delete(phone);
+    }
+  }
+
+  for (const [phone, session] of salesSessions.entries()) {
+    if (now - session.updatedAt > SESSION_TTL) {
+      salesSessions.delete(phone);
     }
   }
 }, 60 * 1000);
@@ -671,7 +872,7 @@ app.get("/webhook", (req, res) => {
   const challenge = req.query["hub.challenge"];
 
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("WEBHOOK VERIFICADO.");
+    console.log("Webhook verificado correctamente.");
     return res.status(200).send(challenge);
   }
 
@@ -683,6 +884,7 @@ app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 
   const body = req.body;
+
   if (body.object !== "whatsapp_business_account") return;
 
   for (const entry of body.entry || []) {
@@ -695,94 +897,66 @@ app.post("/webhook", (req, res) => {
 
       if (change.field !== "messages") continue;
 
-      for (const message of change.value?.messages || []) {
+      const messages = change.value?.messages || [];
+
+      for (const message of messages) {
         if (message.type !== "text") continue;
 
         const from = message.from;
         const text = (message.text?.body || "").trim();
-        const lowerText = text.toLowerCase();
 
         if (!from || !text) continue;
 
         console.log("MENSAJE RECIBIDO:", from, text);
 
         if (isCustomerPaused(from)) {
-          console.log("BOT EN PAUSA:", from);
+          console.log(`BOT EN PAUSA: ${from}`);
           continue;
         }
 
-        // MENÚ
-        if (["menu", "menú"].includes(lowerText)) {
+        const normalized = normalize(text);
+
+        // MENÚ PRINCIPAL
+        if (["menu", "inicio"].includes(normalized)) {
+          guideSessions.delete(from);
+          guideOffers.delete(from);
           salesSessions.delete(from);
           conversations.delete(from);
-          awaitingGuide.delete(from);
-          guideCompleted.delete(from);
+
           sendWhatsAppMessage(from, mainMenu()).catch(console.error);
           continue;
         }
 
-        // ACEPTACIÓN O RECHAZO DE LA GUÍA
-        const affirmative = [
-          "si", "sí", "claro", "por favor", "adelante",
-          "si por favor", "sí por favor", "me interesa"
-        ].includes(lowerText);
+        // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA PRIMERO
+        if (guideSessions.has(from)) {
+          handleConnectionGuide(from, text).catch(console.error);
+          continue;
+        }
 
-        const negative = [
-          "no", "no gracias", "ahora no"
-        ].includes(lowerText);
-
-        if (awaitingGuide.has(from)) {
-          if (affirmative) {
-            awaitingGuide.delete(from);
-            sendNoInternetGuide(from).catch(console.error);
+        // ACEPTACIÓN DE UNA GUÍA OFRECIDA POR LA IA
+        if (guideOffers.has(from)) {
+          if (isYes(text)) {
+            startConnectionGuide(from).catch(console.error);
             continue;
           }
 
-          if (negative) {
-            awaitingGuide.delete(from);
+          if (isNo(text)) {
+            guideOffers.delete(from);
             sendWhatsAppMessage(
               from,
-              "De acuerdo. Si necesitas la guía más adelante, puedes solicitarla escribiendo MENU y seleccionando la opción 1."
+              "De acuerdo. Si necesitas revisar tu conexión, escribe MENU y selecciona la opción 1."
             ).catch(console.error);
             continue;
           }
         }
 
-        // CONFIRMACIÓN DESPUÉS DE RECIBIR LA GUÍA
-        if (guideCompleted.has(from) && affirmative) {
-          guideCompleted.delete(from);
-          sendWhatsAppMessage(
-            from,
-            "¡Excelente! Nos alegra que tu servicio haya regresado. 💙 ¿Necesitas algo más? Escribe MENU para ver las opciones."
-          ).catch(console.error);
+        // OPCIÓN 1: INICIAR GUÍA PASO A PASO
+        if (normalized === "1") {
+          startConnectionGuide(from).catch(console.error);
           continue;
         }
 
-        if (guideCompleted.has(from) && negative) {
-          guideCompleted.delete(from);
-          sendWhatsAppMessage(
-            from,
-            `Entendido. Vamos a solicitar apoyo técnico. 👨‍🔧
-
-Por favor, envíanos:
-1. Nombre completo.
-2. Localidad.
-3. Número de teléfono.
-4. Describe si las luces del PoE o del router están encendidas o apagadas.
-
-No presiones RESET ni cambies los cables de sus puertos.`
-          ).catch(console.error);
-          continue;
-        }
-
-        // OPCIÓN 1: GUÍA VISUAL DIRECTA
-        if (lowerText === "1") {
-          awaitingGuide.delete(from);
-          sendNoInternetGuide(from).catch(console.error);
-          continue;
-        }
-
-        // CONTRATACIONES
+        // CONTRATACIONES EN CURSO
         const salesReply = handleSales(from, text);
 
         if (salesReply) {
@@ -792,11 +966,11 @@ No presiones RESET ni cambies los cables de sus puertos.`
           continue;
         }
 
-        // MENÚ FIJO
+        // OPCIONES DEL MENÚ
         const fixedReply = getMenuReply(text);
 
         if (fixedReply) {
-          if (lowerText === "5") startSales(from);
+          if (normalized === "5") startSales(from);
 
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", fixedReply);
@@ -808,20 +982,16 @@ No presiones RESET ni cambies los cables de sus puertos.`
         getAIReply(from, text)
           .then(async reply => {
             if (isCustomerPaused(from)) {
-              console.log("RESPUESTA CANCELADA POR PAUSA:", from);
+              console.log(`RESPUESTA CANCELADA POR PAUSA: ${from}`);
               return;
             }
 
-            // Detectar oferta de guía en la respuesta de IA
-            const offersGuide =
-              /quieres que te comparta.*gu[ií]a|te comparto.*gu[ií]a|deseas.*gu[ií]a|quieres.*gu[ií]a.*conexiones/i.test(reply);
-
-            if (offersGuide) {
-              awaitingGuide.set(from, Date.now() + 10 * 60 * 1000);
-            }
+            const lowerMessage = normalized;
 
             const salesIntent =
-              /contratar|quiero internet|me interesa|quiero el servicio|darme de alta/.test(lowerText);
+              /contratar|quiero internet|me interesa|quiero el servicio|darme de alta/.test(
+                lowerMessage
+              );
 
             if (salesIntent && !salesSessions.has(from)) {
               startSales(from);
@@ -829,9 +999,21 @@ No presiones RESET ni cambies los cables de sus puertos.`
               saveConversation(from, "assistant", reply);
             }
 
+            // Detecta cuando la IA ofrece una guía de conexión.
+            const offersGuide =
+              /guia rapida|guia para revisar|revisar los cables|revisar las conexiones|guia visual/.test(
+                normalize(reply)
+              );
+
+            if (offersGuide) {
+              guideOffers.set(from, Date.now());
+            }
+
             await sendWhatsAppMessage(from, reply);
           })
-          .catch(error => console.error("ERROR PROCESANDO MENSAJE:", error));
+          .catch(error => {
+            console.error("ERROR PROCESANDO MENSAJE:", error);
+          });
       }
     }
   }
@@ -855,9 +1037,9 @@ app.get("/health", (_req, res) => {
     manualPauseStoragePath: DATA_DIR,
     activeManualPauses: manualPauses.size,
     visualSupport: true,
-    poeImageConfigured: true,
-    routerImageConfigured: true,
-    guideAcceptanceHandling: true
+    guideMode: "step-by-step",
+    poeImageConfigured: Boolean(POE_IMAGE_URL),
+    routerImageConfigured: Boolean(ROUTER_IMAGE_URL)
   });
 });
 
@@ -879,14 +1061,14 @@ app.post("/api/test-message", (req, res) => {
   res.json({ received: true, message });
 });
 
-// INICIO
+// INICIAR SERVIDOR
 loadManualPauses()
   .then(() => {
     app.listen(PORT, "0.0.0.0", () => {
-      console.log("PIT COMUNICACIONES ACTIVO EN PUERTO", PORT);
-      console.log("ALMACENAMIENTO:", DATA_DIR);
-      console.log("GUÍA VISUAL CONFIGURADA.");
-      console.log("ACEPTACIÓN DE GUÍA CONFIGURADA.");
+      console.log(`PIT COMUNICACIONES activo en puerto ${PORT}`);
+      console.log(`Almacenamiento persistente: ${DATA_DIR}`);
+      console.log(`Archivo de pausas: ${PAUSES_FILE}`);
+      console.log("Guía visual paso a paso configurada.");
     });
   })
   .catch(error => {
