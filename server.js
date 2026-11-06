@@ -2,6 +2,7 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,17 +18,83 @@ const API_VERSION = process.env.GRAPH_API_VERSION || "v25.0";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-// Memoria temporal por cliente.
+// MEMORIA TEMPORAL
 const conversations = new Map();
 const salesSessions = new Map();
 const MEMORY_LIMIT = 12;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
 
-// Pausa automática por atención manual.
+// PAUSAS MANUALES PERSISTENTES
 const manualPauses = new Map();
 const MANUAL_PAUSE_DURATION = 30 * 60 * 1000;
 const processedEchoes = new Map();
 
+const DATA_DIR = process.env.DATA_DIR || "/data";
+const PAUSES_FILE = path.join(DATA_DIR, "manual-pauses.json");
+
+let pauseWriteQueue = Promise.resolve();
+
+async function persistManualPauses() {
+  const snapshot = Object.fromEntries(manualPauses);
+
+  pauseWriteQueue = pauseWriteQueue
+    .then(async () => {
+      await fs.promises.mkdir(DATA_DIR, { recursive: true });
+
+      const tempFile = `${PAUSES_FILE}.tmp`;
+
+      await fs.promises.writeFile(
+        tempFile,
+        JSON.stringify(snapshot, null, 2),
+        "utf8"
+      );
+
+      await fs.promises.rename(tempFile, PAUSES_FILE);
+    })
+    .catch(error => {
+      console.error("ERROR GUARDANDO PAUSAS:", error);
+    });
+
+  return pauseWriteQueue;
+}
+
+async function loadManualPauses() {
+  await fs.promises.mkdir(DATA_DIR, { recursive: true });
+
+  try {
+    const content = await fs.promises.readFile(PAUSES_FILE, "utf8");
+    const savedPauses = JSON.parse(content);
+    const now = Date.now();
+
+    for (const [phone, pauseUntil] of Object.entries(savedPauses)) {
+      if (
+        typeof pauseUntil === "number" &&
+        Number.isFinite(pauseUntil) &&
+        pauseUntil > now
+      ) {
+        manualPauses.set(phone, pauseUntil);
+      }
+    }
+
+    console.log(
+      `PAUSAS RECUPERADAS: ${manualPauses.size} clientes con pausa activa.`
+    );
+
+    if (manualPauses.size !== Object.keys(savedPauses).length) {
+      await persistManualPauses();
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      console.log("Archivo de pausas nuevo. Creando almacenamiento.");
+      await persistManualPauses();
+      return;
+    }
+
+    throw error;
+  }
+}
+
+// INFORMACIÓN DEL NEGOCIO
 const businessInfo = {
   business: "PIT COMUNICACIONES",
   plan: {
@@ -55,6 +122,7 @@ const businessInfo = {
   }
 };
 
+// MEMORIA DE CONVERSACIONES
 function getConversation(phone) {
   const session = conversations.get(phone);
 
@@ -80,6 +148,7 @@ function saveConversation(phone, role, content) {
   session.updatedAt = Date.now();
 }
 
+// MENÚ PRINCIPAL
 function mainMenu() {
   return `📡 *PIT COMUNICACIONES*
 
@@ -103,6 +172,7 @@ Estamos para ayudarte. ¿Qué servicio necesitas hoy?
 Conectando contigo.`;
 }
 
+// ENVÍO DE WHATSAPP
 async function sendWhatsAppMessage(to, message) {
   if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
     console.error("Faltan variables de WhatsApp en Railway.");
@@ -135,6 +205,7 @@ async function sendWhatsAppMessage(to, message) {
   }
 }
 
+// RESPUESTAS DEL MENÚ
 function getMenuReply(message) {
   const option = message.trim().toLowerCase();
 
@@ -238,6 +309,7 @@ Un técnico deberá revisar tu solicitud.`;
   }
 }
 
+// CONTRATACIONES
 function startSales(phone) {
   salesSessions.set(phone, {
     step: "locality",
@@ -348,6 +420,7 @@ Si necesitas algo más, escribe MENU.`;
   return null;
 }
 
+// INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
   if (!OPENAI_API_KEY) {
     return "Por el momento no puedo responder esa consulta automáticamente. Escribe MENU para ver las opciones o TECNICO para solicitar atención.";
@@ -430,13 +503,14 @@ REGLAS:
   }
 }
 
-// PAUSA DE ATENCIÓN MANUAL
-
+// CONTROL DE PAUSA MANUAL
 function pauseCustomer(phone) {
   if (!phone) return;
 
   const pauseUntil = Date.now() + MANUAL_PAUSE_DURATION;
+
   manualPauses.set(phone, pauseUntil);
+  persistManualPauses();
 
   console.log(
     `PAUSA MANUAL: respuestas automáticas suspendidas para ${phone} hasta ${new Date(pauseUntil).toISOString()}`
@@ -450,6 +524,8 @@ function isCustomerPaused(phone) {
 
   if (Date.now() >= pauseUntil) {
     manualPauses.delete(phone);
+    persistManualPauses();
+
     console.log(`PAUSA FINALIZADA para ${phone}. El bot vuelve a responder.`);
     return false;
   }
@@ -457,6 +533,7 @@ function isCustomerPaused(phone) {
   return true;
 }
 
+// DETECCIÓN DE MENSAJES MANUALES
 function processManualMessageEchoes(change) {
   if (change.field !== "smb_message_echoes") return;
 
@@ -478,14 +555,22 @@ function processManualMessageEchoes(change) {
   }
 }
 
+// LIMPIEZA AUTOMÁTICA
 setInterval(() => {
   const now = Date.now();
+  let pausesChanged = false;
 
   for (const [phone, pauseUntil] of manualPauses.entries()) {
     if (now >= pauseUntil) {
       manualPauses.delete(phone);
+      pausesChanged = true;
+
       console.log(`Pausa eliminada para ${phone}.`);
     }
+  }
+
+  if (pausesChanged) {
+    persistManualPauses();
   }
 
   for (const [id, timestamp] of processedEchoes.entries()) {
@@ -496,7 +581,6 @@ setInterval(() => {
 }, 60 * 1000);
 
 // VERIFICACIÓN DEL WEBHOOK
-
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -511,7 +595,6 @@ app.get("/webhook", (req, res) => {
 });
 
 // RECEPCIÓN DE MENSAJES
-
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
 
@@ -522,7 +605,6 @@ app.post("/webhook", (req, res) => {
   for (const entry of body.entry || []) {
     for (const change of entry.changes || []) {
 
-      // Mensajes enviados manualmente desde WhatsApp Business.
       if (change.field === "smb_message_echoes") {
         processManualMessageEchoes(change);
         continue;
@@ -542,7 +624,6 @@ app.post("/webhook", (req, res) => {
 
         console.log("Mensaje recibido de:", from, text);
 
-        // No responder mientras el cliente esté en pausa manual.
         if (isCustomerPaused(from)) {
           console.log(`BOT EN PAUSA: mensaje de ${from} ignorado.`);
           continue;
@@ -577,7 +658,6 @@ app.post("/webhook", (req, res) => {
 
         getAIReply(from, text)
           .then(async reply => {
-            // Comprobar nuevamente antes de enviar la respuesta.
             if (isCustomerPaused(from)) {
               console.log(`RESPUESTA CANCELADA: ${from} está en pausa manual.`);
               return;
@@ -603,7 +683,6 @@ app.post("/webhook", (req, res) => {
 });
 
 // RUTAS DE LA APLICACIÓN
-
 app.get("/", (_req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -616,7 +695,10 @@ app.get("/health", (_req, res) => {
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
     conversationMemory: "temporary",
-    manualCustomerPause: "30 minutes"
+    manualCustomerPause: "30 minutes",
+    manualPauseStorage: "persistent-file",
+    manualPauseStoragePath: DATA_DIR,
+    activeManualPauses: manualPauses.size
   });
 });
 
@@ -638,6 +720,16 @@ app.post("/api/test-message", (req, res) => {
   res.json({ received: true, message });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`PIT COMUNICACIONES activo en puerto ${PORT}`);
-});
+// INICIAR SERVIDOR DESPUÉS DE RECUPERAR LAS PAUSAS
+loadManualPauses()
+  .then(() => {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`PIT COMUNICACIONES activo en puerto ${PORT}`);
+      console.log(`Almacenamiento persistente: ${DATA_DIR}`);
+      console.log(`Archivo de pausas: ${PAUSES_FILE}`);
+    });
+  })
+  .catch(error => {
+    console.error("ERROR INICIANDO ALMACENAMIENTO:", error);
+    process.exit(1);
+  });
