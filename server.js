@@ -52,7 +52,7 @@ async function persistManualPauses() {
     .then(async () => {
       await fs.promises.mkdir(DATA_DIR, { recursive: true });
 
-      const tempFile = `${PAUSES_FILE}.tmp`;
+      const tempFile = PAUSES_FILE + ".tmp";
 
       await fs.promises.writeFile(
         tempFile,
