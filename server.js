@@ -1,4 +1,3 @@
-```javascript
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -687,14 +686,22 @@ async function handleSalesSession(phone, message) {
     }
 
     session.name = answer;
-    session.step = "locality";
 
-    await sendWhatsAppMessage(
-      phone,
-      `Gracias, ${session.name}. 😊
+    if (session.locality) {
+      session.step = "address";
+      await sendWhatsAppMessage(
+        phone,
+        `Gracias, ${session.name}. 😊\n\nTengo registrada tu localidad como ${session.locality}. Ahora indícame tu dirección o una ubicación cercana para identificar dónde sería la instalación.`
+      );
+    } else {
+      session.step = "locality";
+      await sendWhatsAppMessage(
+        phone,
+        `Gracias, ${session.name}. 😊
 
 Ahora dime, ¿en qué localidad o colonia deseas contratar el servicio?`
-    );
+      );
+    }
 
     return true;
   }
@@ -822,81 +829,83 @@ Si necesitas hablar con un asesor, escribe *ASESOR*.`
   return true;
 }
 
-// VENTAS: CONFIRMAR O SOLICITAR ASESOR
-async function handleSalesOfferAcceptance(phone, message) {
+// VENTAS: CONFIRMAR OFERTA, CONTINUAR CONTRATACIÓN O SOLICITAR ASESOR
+// Esta función es síncrona para que el webhook pueda saber inmediatamente
+// si el mensaje ya fue atendido. Los envíos de WhatsApp se ejecutan en segundo plano.
+function handleSalesOfferAcceptance(phone, message) {
   const offer = salesOffers.get(phone);
-
   if (!offer) return false;
 
   const answer = normalize(message);
 
-  if (isHumanSupportRequest(message) || answer === "asesor") {
+  if (isHumanSupportRequest(message) || answer === "asesor" || answer === "tecnico" || answer === "técnico") {
     salesOffers.delete(phone);
-
-    await offerHumanSupport(
+    offerHumanSupport(
       phone,
-      "El cliente terminó su solicitud de contratación y desea hablar con un asesor."
-    );
-
+      "El cliente respondió a la oferta de contratación y desea hablar con un asesor o técnico."
+    ).catch(error => console.error("ERROR SOLICITANDO ASESOR:", error));
     return true;
   }
 
+  // La solicitud ya fue registrada; no volver a iniciar la contratación.
   if (offer.step === "confirmed") {
-    if (
-      answer === "menu" ||
-      answer === "inicio" ||
-      answer === "principal"
-    ) {
+    if (["menu", "inicio", "principal"].includes(answer)) {
       salesOffers.delete(phone);
-
-      await sendWhatsAppMessage(phone, mainMenu());
+      sendWhatsAppMessage(phone, mainMenu()).catch(console.error);
       return true;
     }
 
-    await sendWhatsAppMessage(
+    sendWhatsAppMessage(
       phone,
-      "Tu solicitud ya fue recibida. Si deseas hablar con un asesor, escribe ASESOR. Para ver el menú, escribe MENU."
-    );
-
+      "Tu solicitud ya fue recibida. Un asesor revisará la cobertura y se comunicará contigo. Si deseas atención personalizada, escribe ASESOR. Para ver el menú, escribe MENU."
+    ).catch(console.error);
     return true;
   }
 
-  return false;
-}
-  if (!isAcceptance) return null;
+  // La IA ofreció ayudar a contratar. Solo iniciar el registro cuando el cliente acepta.
+  if (isYes(message) || /^(contratar|quiero contratar|me interesa|si me interesa)$/.test(answer)) {
+    const mentioned = getMentionedLocalities(message);
+    let locality = mentioned.length === 1 ? mentioned[0] : "";
 
-  const mentioned = getMentionedLocalities(message);
-  let locality = mentioned.length === 1 ? mentioned[0] : "";
+    if (!locality && Array.isArray(offer.localities) && offer.localities.length === 1) {
+      locality = offer.localities[0];
+    }
 
-  if (!locality && offer.localities.length === 1) {
-    locality = offer.localities[0];
+    salesOffers.delete(phone);
+    salesSessions.set(phone, {
+      step: "name",
+      name: "",
+      locality,
+      address: "",
+      reference: "",
+      updatedAt: Date.now()
+    });
+
+    const question = locality
+      ? `¡Con gusto te ayudamos con la contratación para ${locality}!
+
+Para comenzar, ¿me compartes tu nombre completo?`
+      : "¡Con gusto te ayudamos con la contratación! Primero, ¿me compartes tu nombre completo?";
+
+    sendWhatsAppMessage(phone, question).catch(console.error);
+    return true;
   }
 
-  salesOffers.delete(phone);
-
-  if (!locality) {
-    startSales(phone);
-
-    return "¡Con gusto te ayudamos con la contratación! Primero, ¿en qué localidad deseas instalar el servicio?";
+  if (isNo(message)) {
+    salesOffers.delete(phone);
+    sendWhatsAppMessage(
+      phone,
+      "De acuerdo. Si más adelante deseas contratar Internet, escribe CONTRATAR. También puedes escribir MENU para ver las opciones."
+    ).catch(console.error);
+    return true;
   }
 
-  salesSessions.set(phone, {
-    step: "name",
-    locality,
-    name: "",
-    address: "",
-    updatedAt: Date.now()
-  });
-
-  const fee = getInstallationFee(locality);
-
-  const feeText = fee !== null
-    ? `El costo de instalación en ${locality} es de $${fee} MXN.`
-    : "Un técnico debe confirmar la cobertura y el costo de instalación.";
-
-  return `${feeText}
-
-Para continuar con tu contratación, ¿me compartes tu nombre completo?`;
+  // Mantener la conversación dentro de la oferta, sin dejar al cliente sin respuesta.
+  sendWhatsAppMessage(
+    phone,
+    "¿Te gustaría iniciar tu solicitud de contratación? Responde SI para continuar, NO para dejarlo para después o ASESOR para recibir atención personalizada."
+  ).catch(console.error);
+  return true;
 }
 
 function getSalesQuestionReply(session, message) {
