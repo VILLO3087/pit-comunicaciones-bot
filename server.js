@@ -176,6 +176,7 @@ function getConversation(phone) {
   session.updatedAt = Date.now();
   return session;
 }
+
 function sessionTextForSales(phone, currentMessage) {
   const session = getConversation(phone);
 
@@ -357,6 +358,25 @@ async function handleConnectionGuide(phone, message) {
 
   if (session.step === "poe") {
     if (isNo(message)) {
+    await sendWhatsAppMessage(
+      phone,
+      "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
+    );
+
+    return true;
+  }
+
+  if (!isYes(message) && !isNo(message)) {
+    await sendWhatsAppMessage(
+      phone,
+      "Para continuar con la guía, responde *SI*. Si deseas detenerla, escribe *CANCELAR*."
+    );
+
+    return true;
+  }
+
+  if (session.step === "poe") {
+    if (isNo(message)) {
       await sendWhatsAppMessage(
         phone,
         "No hay problema. Cuando hayas identificado el adaptador PoE y sus dos cables, responde *SI* para continuar."
@@ -367,6 +387,7 @@ async function handleConnectionGuide(phone, message) {
 
     session.step = "router";
     session.updatedAt = Date.now();
+
     await sendWhatsAppMessage(
       phone,
       `🔌 *PASO 2. CONEXIONES DEL ADAPTADOR PoE*
@@ -538,7 +559,9 @@ Vamos a revisar tu conexión.
 
 No presiones el botón RESET.
 
-Si continúa     case "3":
+Si continúa lento, escribe *TECNICO*.`;
+
+    case "3":
       return `💳 *INFORMACIÓN DE PAGOS*
 
 Puedes realizar tu pago mediante:
@@ -658,7 +681,8 @@ function getMentionedLocalities(text) {
   }
 
   return [...new Set(found)];
-}lento, escribe *TECNICO*.`;
+}
+
 // PROCESAR ACEPTACIÓN DE CONTRATACIÓN
 function handleSalesOfferAcceptance(phone, message) {
   const offer = salesOffers.get(phone);
@@ -673,7 +697,6 @@ function handleSalesOfferAcceptance(phone, message) {
     /contrat|instalacion|instalar|en la libertad|emiliano zapata|morelos/.test(
       normalized
     );
-
   if (!isAcceptance) return null;
 
   const mentioned = getMentionedLocalities(message);
@@ -773,6 +796,7 @@ ${salesPendingPrompt(session)}`;
 
   return null;
 }
+
 function salesPendingPrompt(session) {
   if (session.step === "locality") return "Para continuar con tu solicitud, dime en qué localidad deseas el servicio.";
   if (session.step === "name") return "Para continuar con tu contratación, todavía necesito tu *nombre completo y apellidos*.";
@@ -885,6 +909,7 @@ Tu solicitud todavía no representa una instalación confirmada.`;
 
   return null;
 }
+
 // INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
   const normalizedMessage = normalize(message);
@@ -1010,7 +1035,6 @@ function isCustomerPaused(phone) {
   const pauseUntil = manualPauses.get(phone);
 
   if (!pauseUntil) return false;
-
   if (Date.now() >= pauseUntil) {
     manualPauses.delete(phone);
     persistManualPauses();
@@ -1022,6 +1046,7 @@ function isCustomerPaused(phone) {
 
   return true;
 }
+
 // DETECCIÓN DE MENSAJES MANUALES
 function processManualMessageEchoes(change) {
   if (change.field !== "smb_message_echoes") return;
