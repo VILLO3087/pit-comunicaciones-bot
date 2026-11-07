@@ -1,7 +1,8 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.2 (revisión completa)
+// Versión V8.3 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
+// V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -255,6 +256,21 @@ function isMonthlyPriceQuestion(text) {
   return !/\b(fecha|fechas|dia|dias|cuando|donde|pagar|pago|pagos|pague|mora|recargo|recargos|atraso|vence|vencimiento|oxxo|transferencia|deposito|comprobante|debo|adeudo)\b/.test(v);
 }
 
+// "¿No tienes otro plan con más velocidad?", "¿Tienen planes de 50 megas?", "otros paquetes".
+function isOtherPlansQuestion(text) {
+  const v = clean(text);
+  return (
+    /\b(otro|otra|otros|otras|diferente|diferentes|distinto|distintos|mejor|mayor|superior|mas grande|mas rapido|mas caro|economico|mas barato|adicional|adicionales)\b.*\b(plan|planes|paquete|paquetes|opcion|opciones|velocidad)\b/.test(v) ||
+    /\b(plan|planes|paquete|paquetes)\b.*\b(otro|otra|otros|otras|diferente|diferentes|distinto|distintos|mas|mejor|mayor|superior|rapido|economico|barato|de \d+)\b/.test(v) ||
+    /\bmas (velocidad|megas|mbps|rapido)\b/.test(v) ||
+    /\b(\d{2,4}) ?(megas|mb|mbps|mega)\b/.test(v) && !/\b25 ?(megas|mb|mbps|mega)\b/.test(v) ||
+    /\b(solo|nada mas|unicamente) (tienen|tienes|manejan|hay) (ese|un|1) plan\b/.test(v) ||
+    /\b(que|cuales) (planes|paquetes) (tienen|manejan|hay|ofrecen)\b/.test(v) ||
+    /\b(mas|otras) opciones\b/.test(v) ||
+    /\b(subir|aumentar|mejorar) (de |la |mi )?(velocidad|plan|megas)\b/.test(v)
+  );
+}
+
 function isPriceQuestion(text) {
   const v = clean(text);
   return /\b(cuanto (cuesta|es|sale|cobran|vale)|precio|precios|costo|costos|planes|plan familiar|velocidad|cuantos megas|cuantos mbps|megas)\b/.test(v);
@@ -446,6 +462,8 @@ const SLOW_REPLY = `🐢 *INTERNET LENTO – PIT COMUNICACIONES*\n\nVamos a revi
 const PAYMENT_REPLY = `💳 *INFORMACIÓN DE PAGOS – PIT COMUNICACIONES*\n\n📅 Puedes realizar tu pago del día *15 al 20 de cada mes*.\n⚠️ A partir del día 21 se aplica un cargo adicional de *$30 MXN* por mora.\n🚫 El servicio puede ser suspendido por falta de pago.\n\nAceptamos efectivo, transferencia bancaria y depósito en OXXO.\n\nAl realizar tu pago, envía tu comprobante y nombre completo para verificarlo. No se confirma ningún pago hasta que sea revisado.\n\nSi necesitas apoyo, escribe *ASESOR*.`;
 
 const MONTHLY_REPLY = `💰 *MENSUALIDAD – PIT COMUNICACIONES*\n\nLa mensualidad del *Plan Familiar* es de *$350 MXN*.\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n♾️ Navegación sin límite.\n\nLa mensualidad es la misma en todas las localidades; lo que cambia es el costo de instalación. Se paga del día 15 al 20 de cada mes.\n\n¿Te interesa contratar? Escribe *CONTRATAR*.`;
+
+const OTHER_PLANS_REPLY = `🚀 *OTROS PLANES – PIT COMUNICACIONES*\n\nPara conocer si contamos con otros planes, mayor velocidad o paquetes especiales, te recomendamos hablar con un *asesor de ventas*. Él te dará información detallada y confirmará las opciones disponibles para tu localidad.\n\n👨‍💼 Escribe *ASESOR* para solicitar atención personalizada.\n\nNuestro plan actual es el *Plan Familiar*: 25 Mbps de descarga, 10 Mbps de subida, $350 MXN al mes.`;
 
 const PLAN_REPLY = `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n💰 *$350 MXN al mes.*\n♾️ Navegación sin límite.\n\n¿Te interesa contratar? Escribe *CONTRATAR*. Para hablar con ventas, escribe *ASESOR*.`;
 
@@ -845,9 +863,8 @@ function salesPendingPrompt(session) {
 function getSalesQuestionReply(session, message) {
   const normalized = clean(message);
 
-  const asksOtherPlans = /\b(otro|otra|otros|otras|mas|diferente|diferentes)\b.*\b(plan|planes|paquete|paquetes|opcion|opciones)\b|\b(plan|planes|paquete|paquetes)\b.*\b(otro|otra|diferente|diferentes|adicional|adicionales|distinto|distintos|mas)\b/.test(normalized);
-  if (asksOtherPlans) {
-    return `¡Claro! 😊\n\nPara conocer si contamos con otros planes o paquetes, te recomendamos hablar con un *asesor de ventas de PIT COMUNICACIONES*.\n\n${salesPendingPrompt(session)}`;
+  if (isOtherPlansQuestion(normalized)) {
+    return `Para conocer si contamos con otros planes o mayor velocidad, te recomendamos hablar con un *asesor de ventas*. Escribe *ASESOR* cuando quieras que te atienda una persona.\n\n${salesPendingPrompt(session)}`;
   }
 
   if (/\b(instalacion|instalar|instalan)\b/.test(normalized)) {
@@ -885,7 +902,7 @@ async function handleSalesSession(phone, message) {
   }
 
   // Preguntas durante la contratación: responder y conservar el paso.
-  const asksPriceOrMonthly = isPriceQuestion(answer) || isMonthlyPriceQuestion(answer) || /\bmensualidad(es)?\b/.test(normalizedAnswer);
+  const asksPriceOrMonthly = isOtherPlansQuestion(answer) || isPriceQuestion(answer) || isMonthlyPriceQuestion(answer) || /\bmensualidad(es)?\b/.test(normalizedAnswer);
   if (session.step !== "confirm" && (looksLikeQuestion(answer) || asksPriceOrMonthly)) {
     const fixed = getSalesQuestionReply(session, answer);
     if (fixed) {
@@ -1036,6 +1053,7 @@ REGLAS:
 - El Plan Familiar cuesta $350 MXN al mes: 25 Mbps de bajada y 10 Mbps de subida, sin límite de navegación. Los dispositivos comparten la velocidad.
 - No inventes planes, precios, promociones, cobertura ni fechas.
 - Instalación: La Libertad $600, Emiliano Zapata $800, Ejido Morelos $1,200. En otras localidades un técnico debe confirmar cobertura y costo.
+- Si preguntan por otros planes, más velocidad o paquetes, NO digas que solo existe un plan: indica que un asesor de ventas les dará información y que escriban ASESOR.
 - Pagos: del día 15 al 20 de cada mes. Desde el día 21 se cobran $30 MXN de mora y el servicio puede suspenderse. Solo menciona pagos si el cliente pregunta por pagos.
 - Si el cliente dice que no tiene Internet o que falla su servicio, NO hables de pagos: ofrece una guía rápida para revisar los cables.
 - Si el cliente dice que ya tiene Internet o se despide, agradece y despídete en una sola línea, sin hacer más preguntas.
@@ -1271,6 +1289,12 @@ async function processMessage(from, text) {
     return;
   }
 
+  // 10.4 Otros planes o más velocidad: derivar a asesor de ventas.
+  if (isOtherPlansQuestion(text)) {
+    await reply(from, text, OTHER_PLANS_REPLY);
+    return;
+  }
+
   // 10.5 Precio de la mensualidad (antes se confundía con fechas de pago).
   if (isMonthlyPriceQuestion(text)) {
     await reply(from, text, MONTHLY_REPLY);
@@ -1407,7 +1431,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.2",
+    version: "V8.3",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1434,7 +1458,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.2 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.3 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
