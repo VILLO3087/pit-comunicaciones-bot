@@ -394,13 +394,13 @@ async function handleConnectionGuide(phone, message) {
     }
     session.step = "poe_black_reseat";
     session.updatedAt = Date.now();
-    await sendWhatsAppMessage(phone, `✅ Gracias. Confirmamos que los cables están en los puertos correctos.\n\n*PASO 2. DESCONECTAR Y CONECTAR EL CABLE NEGRO*\n\n1. Ubica el cable negro conectado en el puerto *POE* del adaptador.\n2. Desconéctalo del puerto *POE*.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectarlo en el mismo puerto *POE*.\n\nNo desconectes el cable de la antena ni muevas ningún otro cable.\n\nCuando termines, responde *SI*. Si necesitas ayuda, escribe *ASESOR*.`);
+    await sendWhatsAppMessage(phone, `✅ Gracias. Confirmamos que los cables están en los puertos correctos.\n\n*PASO 2. DESCONECTAR Y CONECTAR EL CABLE NEGRO*\n\n1. Identifica el cable negro que viene de la antena y llega al adaptador PoE.\n2. Desconecta únicamente el extremo del cable negro que está conectado al puerto *POE* del adaptador.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectar ese mismo extremo en el puerto *POE*.\n\nCuando termines, responde *SI*. Si necesitas ayuda, escribe *ASESOR*.`);
     return true;
   }
 
   if (session.step === "poe_black_reseat") {
     if (isNo(answer)) {
-      await sendWhatsAppMessage(phone, "Está bien. Desconecta únicamente el cable negro del puerto POE, espera 10 segundos y vuelve a conectarlo en ese mismo puerto. Cuando termines, responde SI.");
+      await sendWhatsAppMessage(phone, "Identifica el cable negro que viene de la antena y llega al adaptador PoE. Desconecta únicamente el extremo que está conectado al puerto POE, espera 10 segundos y vuelve a conectar ese mismo extremo en el puerto POE. Cuando termines, responde SI.");
       return true;
     }
     session.step = "poe_gray_reseat";
