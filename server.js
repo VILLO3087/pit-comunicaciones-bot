@@ -160,6 +160,25 @@ function isYes(text) {
   return /^(si|si por favor|si de favor|si gracias|si esta bien|si esta perfecto|claro|claro que si|por supuesto|ok|okay|ok gracias|correcto|listo|continuar|adelante|va|de acuerdo|ya|ya lo hice|ya quedo|ya quedo listo|terminado|hecho)$/.test(value);
 }
 
+function getMexicoTimeContext() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("es-MX", {
+    timeZone: "America/Mexico_City",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const hour = Number(parts.find(part => part.type === "hour")?.value || 0);
+  const minute = parts.find(part => part.type === "minute")?.value || "00";
+
+  let greeting;
+  if (hour >= 6 && hour < 12) greeting = "Buenos días";
+  else if (hour >= 12 && hour < 19) greeting = "Buenas tardes";
+  else greeting = "Buenas noches";
+
+  return { hour, time: `${String(hour).padStart(2, "0")}:${minute}`, greeting };
+}
+
 function isNo(text) {
   return /^(no|nop|negativo|todavia no|aun no|aún no)$/.test(
     normalize(text)
@@ -1155,7 +1174,11 @@ Te recomendamos pagar dentro del periodo establecido para evitar cargos adiciona
 
   const session = getConversation(phone);
 
+  const mexicoTime = getMexicoTimeContext();
   const instructions = `Eres el asesor virtual de PIT COMUNICACIONES, proveedor de Internet inalámbrico en La Libertad, Chiapas.
+
+HORA LOCAL DE MÉXICO: ${mexicoTime.time}. SALUDO Y DESPEDIDA ADECUADOS: ${mexicoTime.greeting}.
+REGLA DE HORARIO: usa "Buenos días" de 06:00 a 11:59, "Buenas tardes" de 12:00 a 18:59 y "Buenas noches" de 19:00 a 05:59. Aplica esta regla también a despedidas y frases como "que tengas...". Nunca uses "buen día" o "buenas tardes" si la hora local indica noche. No menciones la hora salvo que el cliente pregunte.
 
 INFORMACIÓN OFICIAL:
 ${JSON.stringify(businessInfo)}
