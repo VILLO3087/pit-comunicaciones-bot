@@ -1377,3 +1377,4 @@ loadManualPauses()
     console.error("ERROR INICIANDO ALMACENAMIENTO:", error);
     process.exit(1);
   });
+
