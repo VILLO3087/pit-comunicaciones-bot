@@ -150,9 +150,8 @@ function normalize(text) {
 }
 
 function isYes(text) {
-  return /^(si|sí|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya)$/.test(
-    normalize(text)
-  );
+  const value = normalize(text);
+  return /^(si|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya|ya lo hice|ya quedo|ya quedo listo|terminado|hecho)$/.test(value);
 }
 
 function isNo(text) {
@@ -338,9 +337,7 @@ async function startConnectionGuide(phone) {
 
   await sendWhatsAppMessage(phone, `📡 *VAMOS A REVISAR TU CONEXIÓN*
 
-Te ayudaré paso a paso. No haremos todos los pasos de golpe; esperaré tu respuesta antes de continuar.
-
-Primero revisaremos el adaptador PoE. Observa la fotografía y por ahora no desconectes nada.`);
+¡Vamos a revisar tu conexión! 😊 Primero veremos el adaptador PoE. Te indicaré qué revisar y cómo hacerlo. Comencemos.`);
 
   await sendWhatsAppImage(phone, POE_IMAGE_URL, `🔌 *PASO 1. VERIFICAR LOS PUERTOS DEL ADAPTADOR PoE*
 
@@ -382,8 +379,7 @@ async function handleConnectionGuide(phone, message) {
       router_check: "Responde SI si el cable gris que viene del PoE está conectado en WAN, o NO si está conectado en otro puerto.",
       router_wan_reseat: "Cuando hayas desconectado y vuelto a conectar el cable gris en el mismo puerto WAN, responde SI. Si todavía no lo haces, responde NO."
     };
-    await sendWhatsAppMessage(phone, (prompts[session.step] || "Por favor responde SI o NO para continuar.") + "\n\nEn cualquier momento puedes escribir ASESOR o TECNICO para solicitar ayuda.");
-    return true;
+    return false;
   }
 
   if (session.step === "poe_check") {
@@ -568,12 +564,7 @@ Responde:
       return true;
     }
 
-    await sendWhatsAppMessage(
-      phone,
-      "Por favor responde 1 si ya tienes Internet o 2 si todavía no tienes servicio."
-    );
-
-    return true;
+    return false;
   }
 
   if (offer.step === "request_technician") {
@@ -604,33 +595,10 @@ Responde:
       return true;
     }
 
-    await sendWhatsAppMessage(
-      phone,
-      "Responde 1 para solicitar un técnico o 2 si no necesitas atención por ahora."
-    );
-
-    return true;
+    return false;
   }
 
   return false;
-}
-
-// DETECCIÓN DIRECTA DE CLIENTES SIN INTERNET
-// Estas expresiones deben iniciar la guía técnica y no pasar primero por la IA
-// ni por el flujo de captura de reportes.
-function isNoInternetIntent(message) {
-  const text = normalize(message);
-  return (
-    /\bno tengo internet\b/.test(text) ||
-    /\bno hay internet\b/.test(text) ||
-    /\bsin internet\b/.test(text) ||
-    /\bme quede sin internet\b/.test(text) ||
-    /\bse fue el internet\b/.test(text) ||
-    /\bno tengo servicio de internet\b/.test(text) ||
-    /\bsin servicio de internet\b/.test(text) ||
-    /\binternet no funciona\b/.test(text) ||
-    /\bno funciona el internet\b/.test(text)
-  );
 }
 
 // DETECCIÓN DE SOLICITUD DE ASESOR O TÉCNICO
@@ -1207,6 +1175,8 @@ REGLAS:
 - Para fallas persistentes solicita nombre, localidad, teléfono y descripción.
 - Nunca solicites contraseñas, códigos ni datos de tarjetas.
 - Si el cliente pregunta si puedes compartir una guía rápida para revisar cables, puedes ofrecerla.
+- Si el cliente hace una pregunta libre durante el diagnóstico, responde su duda de forma breve y amable; no reinicies la guía ni avances de paso por esa pregunta.
+- Si no sabes responder una duda técnica con certeza, indícalo y ofrece atención de un técnico.
 - Si el cliente acepta una guía, responde brevemente. El sistema enviará la guía paso a paso.
 - Nunca indiques presionar RESET, intercambiar cables POE/LAN ni manipular antena o cableado exterior.
 - Si no tienes certeza, dilo y deriva con un técnico.
@@ -1471,17 +1441,26 @@ app.post("/webhook", (req, res) => {
           paymentFollowups.delete(from);
         }
 
-        // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA PRIMERO
+        // SI EXISTE UNA GUÍA EN CURSO, PRIORIZAR SUS RESPUESTAS.
+        // Las preguntas distintas de SI/NO pasan a la IA sin borrar el paso actual.
         if (guideSessions.has(from)) {
-          handleConnectionGuide(from, text).catch(console.error);
-          continue;
-        }
-
-        // CUALQUIER FORMA NATURAL DE DECIR QUE NO TIENE INTERNET
-        // inicia directamente el diagnóstico paso a paso. No solicitar primero
-        // nombre, localidad ni descripción: esos datos se piden si la guía falla.
-        if (isNoInternetIntent(text)) {
-          startConnectionGuide(from).catch(console.error);
+          handleConnectionGuide(from, text)
+            .then(async handled => {
+              if (handled) return;
+              const reply = await getAIReply(from, text);
+              if (isCustomerPaused(from)) return;
+              const current = guideSessions.get(from);
+              const stepHints = {
+                poe_check: "Cuando estés listo, dime si el cable negro está en POE y el gris en LAN.",
+                poe_black_reseat: "Cuando termines de reconectar el cable negro en POE, responde SI.",
+                poe_gray_reseat: "Cuando termines de reconectar el cable gris en LAN, responde SI.",
+                router_check: "Cuando confirmes si el cable gris llega al puerto WAN del router, responde SI o NO.",
+                router_wan_reseat: "Cuando termines de reconectar el cable en WAN, responde SI."
+              };
+              const reminder = current ? stepHints[current.step] : "";
+              await sendWhatsAppMessage(from, reminder ? `${reply}\n\n${reminder}` : reply);
+            })
+            .catch(console.error);
           continue;
         }
 
@@ -1497,21 +1476,37 @@ app.post("/webhook", (req, res) => {
           }
         }
 
-        // ACEPTACIÓN DE UNA GUÍA OFRECIDA POR LA IA
+        // RESULTADO FINAL DE LA GUÍA: procesarlo ANTES de cualquier aceptación genérica.
+        // Así un SI al confirmar que volvió Internet no reinicia la guía.
         if (guideOffers.has(from)) {
+          const currentOffer = guideOffers.get(from);
+          if (currentOffer && typeof currentOffer === "object" && currentOffer.step) {
+            handleGuideOffer(from, text)
+              .then(async handled => {
+                if (handled) return;
+                const reply = await getAIReply(from, text);
+                if (isCustomerPaused(from)) return;
+                const stillOpen = guideOffers.get(from);
+                let reminder = "";
+                if (stillOpen?.step === "internet_result") {
+                  reminder = "Cuando gustes, dime si ya puedes navegar: 1 para SI o 2 para NO.";
+                } else if (stillOpen?.step === "request_technician") {
+                  reminder = "Cuando gustes, responde 1 para solicitar un técnico o 2 si no necesitas atención por ahora.";
+                }
+                await sendWhatsAppMessage(from, reminder ? `${reply}\n\n${reminder}` : reply);
+              })
+              .catch(console.error);
+            continue;
+          }
+
+          // Oferta previa de guía generada por IA (todavía no iniciada).
           if (isYes(text)) {
             startConnectionGuide(from).catch(console.error);
             continue;
           }
-
           if (isNo(text)) {
             guideOffers.delete(from);
-
-            sendWhatsAppMessage(
-              from,
-              "De acuerdo. Si necesitas revisar tu conexión, escribe MENU y selecciona la opción 1."
-            ).catch(console.error);
-
+            sendWhatsAppMessage(from, "De acuerdo. Si necesitas revisar tu conexión, escribe MENU y selecciona la opción 1.").catch(console.error);
             continue;
           }
         }
@@ -1648,7 +1643,7 @@ app.get("/health", (_req, res) => {
     manualPauseStoragePath: DATA_DIR,
     activeManualPauses: manualPauses.size,
     visualSupport: true,
-    guideMode: "step-by-step-poe-router-reseat-natural-no-internet-intent",
+    guideMode: "step-by-step-poe-router-reseat",
     poeImageConfigured: Boolean(POE_IMAGE_URL),
     routerImageConfigured: Boolean(ROUTER_IMAGE_URL)
   });
