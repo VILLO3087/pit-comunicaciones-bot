@@ -338,27 +338,7 @@ async function handleConnectionGuide(phone, message) {
 
   if (answer === "cancelar") {
     guideSessions.delete(phone);
-
-    await sendWhatsAppMessage(
-      phone,
-      "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
-    );
-
-    return true;
-  }
-
-  if (!isYes(message) && !isNo(message)) {
-    await sendWhatsAppMessage(
-      phone,
-      "Para continuar con la guía, responde *SI*. Si deseas detenerla, escribe *CANCELAR*."
-    );
-
-    return true;
-  }
-
-  if (session.step === "poe") {
-    if (isNo(message)) {
-    await sendWhatsAppMessage(
+        await sendWhatsAppMessage(
       phone,
       "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
     );
@@ -697,6 +677,294 @@ function handleSalesOfferAcceptance(phone, message) {
     /contrat|instalacion|instalar|en la libertad|emiliano zapata|morelos/.test(
       normalized
     );
+    persistManualPauses();
+    return false;
+  }
+
+  return true;
+}
+
+// WEBHOOK DE VERIFICACIÓN
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("WEBHOOK VERIFICADO");
+    return res.status(200).send(challenge);
+  }
+
+  return res.sendStatus(403);
+});
+
+// RECEPCIÓN DE MENSAJES
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200);
+
+  try {
+    const body = req.body;
+
+    if (!body.object) return;
+
+    const entries = body.entry || [];
+
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+
+      for (const change of changes) {
+        const value = change.value || {};
+
+        // MENSAJES ENVIADOS MANUALMENTE DESDE WHATSAPP BUSINESS
+        const echoes = value.messages || [];
+
+        for (const echo of echoes) {
+          if (echo.from && echo.id) {
+            const echoKey = `${echo.from}:${echo.id}`;
+
+            if (!processedEchoes.has(echoKey)) {
+              processedEchoes.set(echoKey, Date.now());
+              pauseCustomer(echo.from);
+            }
+          }
+        }
+
+        // MENSAJES RECIBIDOS DE CLIENTES
+        const messages = value.messages || [];
+
+        for (const message of messages) {
+          const phone = message.from;
+
+          if (!phone || !message.id) continue;
+
+          if (isCustomerPaused(phone)) {
+            console.log(`BOT PAUSADO PARA ${phone}`);
+            continue;
+          }
+
+          if (message.type !== "text") {
+            await sendWhatsAppMessage(
+              phone,
+              "Por favor, envíanos tu consulta en un mensaje de texto para poder ayudarte."
+            );
+            continue;
+          }
+
+          const text = message.text?.body?.trim() || "";
+
+          if (!text) continue;
+
+          console.log(`MENSAJE DE ${phone}: ${text}`);
+
+          // CANCELACIÓN GENERAL
+          if (normalize(text) === "cancelar") {
+            guideSessions.delete(phone);
+            guideOffers.delete(phone);
+            salesSessions.delete(phone);
+            salesOffers.delete(phone);
+
+            await sendWhatsAppMessage(
+              phone,
+              "De acuerdo, hemos cancelado el proceso actual. Escribe MENU para comenzar nuevamente."
+            );
+
+            continue;
+          }
+
+          // MENÚ PRINCIPAL
+          if (["menu", "menú", "inicio", "hola", "buenas"].includes(normalize(text))) {
+            guideSessions.delete(phone);
+            guideOffers.delete(phone);
+            salesSessions.delete(phone);
+            salesOffers.delete(phone);
+
+            await sendWhatsAppMessage(phone, mainMenu());
+            continue;
+          }
+
+          // GUÍA DE CONEXIÓN ACTIVA
+          if (guideSessions.has(phone)) {
+            const handled = await handleConnectionGuide(phone, text);
+
+            if (handled) continue;
+          }
+
+          // ACEPTACIÓN DE GUÍA OFRECIDA
+          if (guideOffers.has(phone)) {
+            if (isYes(text)) {
+              guideOffers.delete(phone);
+              await startConnectionGuide(phone);
+              continue;
+            }
+
+            if (isNo(text)) {
+              guideOffers.delete(phone);
+
+              await sendWhatsAppMessage(
+                phone,
+                "De acuerdo. Si necesitas revisar tu conexión más adelante, escribe *TECNICO*."
+              );
+
+              continue;
+            }
+          }
+
+          // SOLICITUD DIRECTA DE GUÍA TÉCNICA
+          if (
+            /^(tecnico|técnico|guia|guía|revisar cables|ayuda tecnica|ayuda técnica)$/.test(
+              normalize(text)
+            )
+          ) {
+            await startConnectionGuide(phone);
+            continue;
+          }
+
+          // PROCESO DE CONTRATACIÓN ACTIVO
+          if (salesSessions.has(phone)) {
+            const salesReply = handleSales(phone, text);
+
+            if (salesReply) {
+              await sendWhatsAppMessage(phone, salesReply);
+              continue;
+            }
+          }
+
+          // ACEPTACIÓN DE OFERTA DE VENTAS
+          if (salesOffers.has(phone)) {
+            const acceptance = handleSalesOfferAcceptance(phone, text);
+
+            if (acceptance) {
+              await sendWhatsAppMessage(phone, acceptance);
+              continue;
+            }
+          }
+
+          // INICIO DE CONTRATACIÓN
+          if (
+            /^(5|contratar|quiero contratar|contratar internet|quiero internet)$/.test(
+              normalize(text)
+            )
+          ) {
+            startSales(phone);
+
+            await sendWhatsAppMessage(
+              phone,
+              "¡Excelente! Para comenzar, ¿en qué localidad deseas contratar el servicio?"
+            );
+
+            continue;
+          }
+
+          // OPCIONES DEL MENÚ
+          const menuReply = getMenuReply(text);
+
+          if (menuReply) {
+            await sendWhatsAppMessage(phone, menuReply);
+            continue;
+          }
+
+          // SIN INTERNET: OFRECER GUÍA
+          if (
+            /sin internet|no tengo internet|no hay internet|no tengo servicio|se fue el internet|se cayó el internet|se cayo el internet/.test(
+              normalize(text)
+            )
+          ) {
+            guideOffers.set(phone, {
+              createdAt: Date.now()
+            });
+
+            await sendWhatsAppMessage(
+              phone,
+              `📡 *VAMOS A AYUDARTE*
+
+Primero podemos realizar una revisión básica de las conexiones de tu equipo.
+
+¿Deseas que te comparta una guía paso a paso con fotografías para revisar el adaptador PoE y el router?
+
+Responde *SI* para comenzar o *NO* si prefieres solicitar atención de un técnico.`
+            );
+
+            continue;
+          }
+
+          // SOLICITUD DE ASESOR O TÉCNICO
+          if (
+            /asesor|hablar con alguien|persona real|agente|tecnico|técnico|soporte humano|atencion humana|atención humana/.test(
+              normalize(text)
+            )
+          ) {
+            const area = /asesor|ventas/.test(normalize(text))
+              ? "ventas"
+              : "soporte técnico";
+
+            await sendWhatsAppMessage(
+              phone,
+              `🙋 *SOLICITUD DE ATENCIÓN HUMANA*
+
+Entendido. Deseas comunicarte con el área de *${area}* de PIT COMUNICACIONES.
+
+Para que podamos canalizar tu solicitud, por favor comparte:
+
+1️⃣ Tu nombre completo.
+2️⃣ Tu localidad.
+3️⃣ Una breve descripción de lo que necesitas.
+
+Tu solicitud queda pendiente de atención por nuestro equipo.`
+            );
+
+            continue;
+          }
+
+          // RESPUESTA DE INTELIGENCIA ARTIFICIAL
+          const aiReply = await getAIReply(phone, text);
+
+          await sendWhatsAppMessage(phone, aiReply);
+        }
+      }
+    }
+
+    // LIMPIEZA DE ECHOES ANTIGUOS
+    const now = Date.now();
+
+    for (const [key, timestamp] of processedEchoes.entries()) {
+      if (now - timestamp > 60 * 60 * 1000) {
+        processedEchoes.delete(key);
+      }
+    }
+  } catch (error) {
+    console.error("ERROR PROCESANDO WEBHOOK:", error);
+  }
+});
+
+// ESTADO DEL SERVIDOR
+app.get("/", (req, res) => {
+  res.status(200).send("PIT COMUNICACIONES BOT ACTIVO");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "PIT COMUNICACIONES BOT",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// INICIO DEL SERVIDOR
+async function startServer() {
+  try {
+    await loadManualPauses();
+
+    app.listen(PORT, () => {
+      console.log(`PIT COMUNICACIONES BOT escuchando en puerto ${PORT}`);
+      console.log(`Modelo OpenAI: ${OPENAI_MODEL}`);
+    });
+  } catch (error) {
+    console.error("ERROR INICIANDO SERVIDOR:", error);
+    process.exit(1);
+  }
+}
+
+startServer();
   if (!isAcceptance) return null;
 
   const mentioned = getMentionedLocalities(message);
@@ -1037,7 +1305,7 @@ function isCustomerPaused(phone) {
   if (!pauseUntil) return false;
   if (Date.now() >= pauseUntil) {
     manualPauses.delete(phone);
-    persistManualPauses();
+        persistManualPauses();
 
     console.log(`PAUSA FINALIZADA para ${phone}.`);
 
@@ -1377,4 +1645,3 @@ loadManualPauses()
     console.error("ERROR INICIANDO ALMACENAMIENTO:", error);
     process.exit(1);
   });
-
