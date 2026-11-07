@@ -627,6 +627,26 @@ Responde:
 }
 
 // DETECCIÓN DE SOLICITUD DE ASESOR O TÉCNICO
+// DETECCIÓN EXPLÍCITA DE FALLAS DE CONEXIÓN
+// Tiene prioridad sobre consultas de pago para evitar falsos positivos
+// en frases como "No tengo Internet desde el medio día".
+function isConnectionIssueIntent(message) {
+  const text = normalize(message);
+  return (
+    /\b(no tengo|sin|no hay|se fue|perdi|perdí|se cayo|se cayó|no funciona|no conecta|no me conecta)\b.*\b(internet|conexion|servicio|wifi)\b/.test(text) ||
+    /\b(internet|conexion|servicio|wifi)\b.*\b(no funciona|no conecta|esta fallando|se corta|cortes frecuentes|intermitente|sin servicio)\b/.test(text)
+  );
+}
+
+// CONSULTAS DE PAGO: exigir al menos un término inequívoco de pago.
+// "dia" o "internet" por sí solos nunca deben activar esta respuesta.
+function isPaymentQuestion(message) {
+  const text = normalize(message);
+  const hasPaymentTerm = /\b(pago|pagos|pagar|pagado|mensualidad|mensualidades|mora|recargo|atraso|comprobante|transferencia|oxxo)\b/.test(text);
+  const hasPaymentQuestion = /\b(fecha|fechas|dia|dias|cuando|pago|pagos|pagar|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|costo|cuanto|metodo|donde)\b/.test(text);
+  return hasPaymentTerm && hasPaymentQuestion;
+}
+
 function isHumanSupportRequest(message) {
   const text = normalize(message);
 
@@ -976,9 +996,7 @@ function getSalesQuestionReply(session, message) {
   const normalized = normalize(message);
 
   // FECHAS DE PAGO, MORA Y POSIBLE SUSPENSION
-  const asksPaymentDates =
-    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalized) &&
-    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalized);
+  const asksPaymentDates = isPaymentQuestion(message);
 
   if (asksPaymentDates) {
     return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
@@ -1152,9 +1170,7 @@ Tu solicitud todavía no representa una instalación confirmada.`;
 // INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
   const normalizedMessage = normalize(message);
-  const asksPaymentDates =
-    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalizedMessage) &&
-    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalizedMessage);
+  const asksPaymentDates = isPaymentQuestion(message);
 
   if (asksPaymentDates) {
     return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
@@ -1457,6 +1473,14 @@ app.post("/webhook", (req, res) => {
         // SOLICITUD DIRECTA DE ASESOR O TÉCNICO
         if (isHumanSupportRequest(text) || ["asesor", "tecnico"].includes(normalized)) {
           offerHumanSupport(from, "El cliente solicita atención personalizada.").catch(console.error);
+          continue;
+        }
+
+        // FALLAS DE CONEXIÓN: priorizar antes de palabras como "día" o "servicio".
+        // Así "No tengo Internet desde el medio día" inicia la guía y no muestra pagos.
+        if (!guideSessions.has(from) && !guideOffers.has(from) && isConnectionIssueIntent(text)) {
+          paymentFollowups.delete(from);
+          startConnectionGuide(from).catch(console.error);
           continue;
         }
 
