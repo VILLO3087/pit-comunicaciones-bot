@@ -162,9 +162,24 @@ function isNo(text) {
 }
 
 function getInternetResultAnswer(text) {
-  const value = normalize(text).replace(/[.,;:!¡?¿]+/g, " ").replace(/\s+/g, " ").trim();
-  if (["1", "si", "ya tengo internet", "si tengo internet", "ya puedo navegar", "si puedo navegar", "tengo internet"].includes(value)) return "yes";
-  if (["2", "no", "sigo sin internet", "no tengo internet", "todavia no tengo internet", "aun no tengo internet", "no puedo navegar"].includes(value)) return "no";
+  const value = normalize(text)
+    .replace(/[.,;:!¡?¿]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Primero detectar claramente que el cliente SIGUE sin servicio.
+  if (
+    /^(2|no|nop)$/.test(value) ||
+    /\b(sigo sin internet|todavia no tengo internet|aun no tengo internet|no tengo internet|no puedo navegar|sigo sin servicio|continua la falla|sigue fallando)\b/.test(value)
+  ) return "no";
+
+  // Aceptar respuestas afirmativas completas aunque agreguen cortesía:
+  // "Sí, ya tengo Internet, gracias", "Ya puedo navegar".
+  if (
+    /^(1|si|claro|correcto)$/.test(value) ||
+    /\b(ya tengo internet|si tengo internet|tengo internet|ya puedo navegar|si puedo navegar|ya funciona internet|ya funciona|ya quedo|ya quedó)\b/.test(value)
+  ) return "yes";
+
   return null;
 }
 
@@ -562,7 +577,7 @@ async function handleGuideOffer(phone, message) {
     const result = getInternetResultAnswer(message);
     if (result === "yes") {
       guideOffers.delete(phone);
-      await sendWhatsAppMessage(phone, "¡Excelente! 😊 Nos da gusto que tu servicio haya quedado funcionando. Si necesitas algo más, escribe MENU.");
+      await sendWhatsAppMessage(phone, `¡Excelente! 😊 Nos da gusto que tu servicio haya quedado funcionando. Si necesitas algo más, escribe MENU. ¡Que tengas ${getTimeGreeting()}!`);
       return true;
     }
     if (result === "no") {
