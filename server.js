@@ -218,6 +218,42 @@ function mainMenu() {
 Conectando contigo.`;
 }
 
+// RESPUESTAS DEL MENÚ PRINCIPAL
+// Esta función es utilizada por el webhook para responder a las opciones 2 a 7.
+function getMenuReply(message) {
+  const option = normalize(message);
+
+  if (["2", "internet lento", "mi internet esta lento", "mi internet va lento"].includes(option)) {
+    return `🐢 *INTERNET LENTO – PIT COMUNICACIONES*\n\nVamos a revisar tu conexión.\n\n1️⃣ Reinicia tu módem o router desconectándolo durante 30 segundos.\n2️⃣ Conéctalo nuevamente y espera a que encienda por completo.\n3️⃣ Comprueba si mejora la conexión.\n\nSi el problema continúa, escribe *ASESOR* para solicitar ayuda de un técnico.`;
+  }
+
+  if (["3", "pagos", "pago", "informacion sobre pagos", "informacion de pagos"].includes(option)) {
+    return `💳 *INFORMACIÓN DE PAGOS – PIT COMUNICACIONES*\n\n📅 Puedes realizar tu pago del día *15 al 20 de cada mes*.\n⚠️ A partir del día 21 se aplica un cargo adicional de *$30 MXN* por mora.\n🚫 El servicio puede ser suspendido por falta de pago.\n\nAceptamos efectivo, transferencia bancaria y depósito en OXXO.\n\nAl realizar tu pago, envía tu comprobante y nombre completo para verificarlo. No se confirma ningún pago hasta que sea revisado.\n\nSi necesitas apoyo, escribe *ASESOR*.`;
+  }
+
+  if (["4", "planes", "precios", "planes y precios", "precio", "plan"].includes(option)) {
+    return `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n💰 *$350 MXN al mes.*\n♾️ Navegación sin límite.\n\n¿Te interesa contratar? Escribe *CONTRATAR*. Para hablar con ventas, escribe *ASESOR*. `;
+  }
+
+  if (["5", "contratar", "quiero contratar", "quiero contratar internet"].includes(option)) {
+    return `🏠 ¡Con gusto te ayudamos a contratar!\n\nPara iniciar tu solicitud, escribe *CONTRATAR* y te pediremos tus datos paso a paso.`;
+  }
+
+  if (["6", "cobertura", "horarios", "cobertura y horarios", "zonas de cobertura"].includes(option)) {
+    return `📍 *COBERTURA Y HORARIOS – PIT COMUNICACIONES*\n\nTenemos servicio en La Libertad, Chiapas y algunas comunidades cercanas. La cobertura debe confirmarse según tu localidad y domicilio.\n\n🕒 Atención técnica:\nLunes a viernes: 7:00 a 18:00.\nSábado: 7:00 a 14:00.\nDomingo: sin atención técnica.\n\nDinos tu localidad o escribe *ASESOR* para solicitar que revisemos la cobertura.`;
+  }
+
+  if (["7", "tecnico", "tecnica", "hablar con un tecnico", "hablar con tecnico", "asesor"].includes(option) || isHumanSupportRequest(message)) {
+    return `👨‍🔧 *SOLICITUD DE ATENCIÓN PERSONALIZADA*\n\nCon gusto canalizamos tu solicitud con un asesor o técnico.\n\nPor favor responde con:\n1️⃣ Tu nombre completo.\n2️⃣ Tu localidad o colonia.\n3️⃣ Si necesitas un *asesor* o un *técnico*.\n\nNuestro equipo dará seguimiento dentro del horario de atención.`;
+  }
+
+  if (["menu", "inicio", "principal", "hola", "buenas", "buenos dias", "buenas tardes", "buenas noches"].includes(option)) {
+    return mainMenu();
+  }
+
+  return null;
+}
+
 // ENVÍO DE TEXTO
 async function sendWhatsAppMessage(to, message) {
   if (!ACCESS_TOKEN || !PHONE_NUMBER_ID) {
