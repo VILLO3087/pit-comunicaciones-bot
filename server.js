@@ -149,46 +149,40 @@ function normalize(text) {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-// Confirmaciones deliberadamente estrictas: no interpretar palabras sueltas
-// dentro de frases como "No es todo, gracias" o "ya te aviso".
 function isYes(text) {
-  const value = normalize(text).replace(/[.,;:!¡?¿]+/g, " ").replace(/\s+/g, " ").trim();
-  return /^(si|ok|okay|de acuerdo|correcto|claro|adelante|continuar|si por favor|si esta bien)$/.test(value);
-}
-
-function isNo(text) {
-  const value = normalize(text).replace(/[.,;:!¡?¿]+/g, " ").replace(/\s+/g, " ").trim();
-  return /^(no|nop|negativo|no gracias|no por ahora|aun no|todavia no)$/.test(value);
-}
-
-function getInternetResultAnswer(text) {
   const value = normalize(text)
-    .replace(/[.,;:!¡?¿]+/g, " ")
+    .replace(/[.!¡?¿,;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  // Primero detectar claramente que el cliente SIGUE sin servicio.
-  if (
-    /^(2|no|nop)$/.test(value) ||
-    /\b(sigo sin internet|todavia no tengo internet|aun no tengo internet|no tengo internet|no puedo navegar|sigo sin servicio|continua la falla|sigue fallando)\b/.test(value)
-  ) return "no";
-
-  // Aceptar respuestas afirmativas completas aunque agreguen cortesía:
-  // "Sí, ya tengo Internet, gracias", "Ya puedo navegar".
-  if (
-    /^(1|si|claro|correcto)$/.test(value) ||
-    /\b(ya tengo internet|si tengo internet|tengo internet|ya puedo navegar|si puedo navegar|ya funciona internet|ya funciona|ya quedo|ya quedó)\b/.test(value)
-  ) return "yes";
-
-  return null;
+  // Acepta respuestas afirmativas naturales, incluso cuando el cliente
+  // agrega cortesía: "sí, por favor", "sí de favor", "claro que sí".
+  return /^(si|si por favor|si de favor|si gracias|si esta bien|si esta perfecto|claro|claro que si|por supuesto|ok|okay|ok gracias|correcto|listo|continuar|adelante|va|de acuerdo|ya|ya lo hice|ya quedo|ya quedo listo|terminado|hecho)$/.test(value);
 }
 
+function getMexicoTimeContext() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("es-MX", {
+    timeZone: "America/Mexico_City",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(now);
+  const hour = Number(parts.find(part => part.type === "hour")?.value || 0);
+  const minute = parts.find(part => part.type === "minute")?.value || "00";
 
-function getTimeGreeting(date = new Date()) {
-  const hour = Number(new Intl.DateTimeFormat("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", hourCycle: "h23" }).format(date));
-  if (hour >= 5 && hour < 12) return "buenos días";
-  if (hour >= 12 && hour < 19) return "buenas tardes";
-  return "buenas noches";
+  let greeting;
+  if (hour >= 6 && hour < 12) greeting = "Buenos días";
+  else if (hour >= 12 && hour < 19) greeting = "Buenas tardes";
+  else greeting = "Buenas noches";
+
+  return { hour, time: `${String(hour).padStart(2, "0")}:${minute}`, greeting };
+}
+
+function isNo(text) {
+  return /^(no|nop|negativo|todavia no|aun no|aún no)$/.test(
+    normalize(text)
+  );
 }
 
 // MEMORIA
@@ -368,9 +362,7 @@ async function startConnectionGuide(phone) {
 
   await sendWhatsAppMessage(phone, `📡 *VAMOS A REVISAR TU CONEXIÓN*
 
-Te ayudaré paso a paso. No haremos todos los pasos de golpe; esperaré tu respuesta antes de continuar.
-
-Primero revisaremos el adaptador PoE. Observa la fotografía y por ahora no desconectes nada.`);
+¡Claro! 😊 Vamos a revisar tu conexión. Empezaremos por el adaptador PoE y te iré indicando qué hacer en cada paso.`);
 
   await sendWhatsAppImage(phone, POE_IMAGE_URL, `🔌 *PASO 1. VERIFICAR LOS PUERTOS DEL ADAPTADOR PoE*
 
@@ -412,8 +404,7 @@ async function handleConnectionGuide(phone, message) {
       router_check: "Responde SI si el cable gris que viene del PoE está conectado en WAN, o NO si está conectado en otro puerto.",
       router_wan_reseat: "Cuando hayas desconectado y vuelto a conectar el cable gris en el mismo puerto WAN, responde SI. Si todavía no lo haces, responde NO."
     };
-    const aiReply = await getAIReply(phone, message);
-    await sendWhatsAppMessage(phone, `${aiReply}\n\nCuando quieras continuar, responde SI o NO a la pregunta del paso actual. También puedes escribir ASESOR o TECNICO para solicitar ayuda.`);
+    await sendWhatsAppMessage(phone, prompts[session.step] || "Para continuar con la revisión, responde SI o NO. También puedes escribir ASESOR para solicitar ayuda.");
     return true;
   }
 
@@ -429,16 +420,6 @@ async function handleConnectionGuide(phone, message) {
     return true;
   }
 
-  if (session.step === "poe_black_reseat") {
-    if (isNo(answer)) {
-      await sendWhatsAppMessage(phone, "Identifica el cable negro que viene de la antena y llega al adaptador PoE. Desconecta únicamente el extremo que está conectado al puerto POE, espera 10 segundos y vuelve a conectar ese mismo extremo en el puerto POE. Cuando termines, responde SI.");
-      return true;
-    }
-    session.step = "poe_gray_reseat";
-    session.updatedAt = Date.now();
-    await sendWhatsAppMessage(phone, `✅ Muy bien.\n\n*PASO 3. DESCONECTAR Y CONECTAR EL CABLE GRIS DEL PoE*\n\n1. Ubica el cable gris conectado en el puerto *LAN* del adaptador PoE.\n2. Desconéctalo del puerto *LAN*.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectarlo en el mismo puerto *LAN*.\n\nNo lo conectes en POE ni en otro puerto.\n\nCuando termines, responde *SI*.`);
-    return true;
-  }
 
   if (session.step === "poe_gray_reseat") {
     if (isNo(answer)) {
@@ -555,60 +536,113 @@ async function handleSupportSession(phone, message) {
 // RESPUESTA DE LA GUÍA Y SOLICITUD DE TÉCNICO
 async function handleGuideOffer(phone, message) {
   const offer = guideOffers.get(phone);
-  if (!offer) return false;
-  const answer = normalize(message).replace(/[.!¡?¿]+$/g, "").trim();
 
-  if (offer.step === "accept_guide") {
-    if (isYes(message) || ["si por favor", "enviala", "mandala", "si envia la guia", "claro que si"].includes(answer)) {
-      await startConnectionGuide(phone);
-      return true;
-    }
-    if (isNo(message)) {
-      guideOffers.delete(phone);
-      await sendWhatsAppMessage(phone, "De acuerdo. Si después deseas revisar tu conexión, aquí estaremos. También puedes escribir MENU para ver las opciones.");
-      return true;
-    }
-    const reply = await getAIReply(phone, message);
-    await sendWhatsAppMessage(phone, `${reply}\n\nSi deseas que te envíe la guía de conexión, responde SI. Si no la necesitas, responde NO.`);
-    return true;
-  }
+  if (!offer) return false;
+
+  const answer = normalize(message);
 
   if (offer.step === "internet_result") {
-    const result = getInternetResultAnswer(message);
-    if (result === "yes") {
+    if (
+      answer === "1" ||
+      answer.includes("si tengo internet") ||
+      answer.includes("ya tengo internet") ||
+      answer === "si"
+    ) {
       guideOffers.delete(phone);
-      await sendWhatsAppMessage(phone, `¡Excelente! 😊 Nos da gusto que tu servicio haya quedado funcionando. Si necesitas algo más, escribe MENU. ¡Que tengas ${getTimeGreeting()}!`);
+
+      await sendWhatsAppMessage(
+        phone,
+        `¡Excelente! 😊 Nos da gusto saber que ya tienes Internet. Si necesitas algo más, aquí estamos. ${getMexicoTimeContext().greeting}.`
+      );
+
       return true;
     }
-    if (result === "no") {
+
+    if (
+      answer === "2" ||
+      answer === "no" ||
+      answer.includes("sigo sin internet") ||
+      answer.includes("no tengo internet")
+    ) {
       offer.step = "request_technician";
-      offer.updatedAt = Date.now();
-      await sendWhatsAppMessage(phone, "Lamentamos que el problema continúe.\n\n¿Deseas que solicitemos la atención de un técnico?\n\nResponde:\n1️⃣ Sí, quiero hablar con un técnico.\n2️⃣ No, por ahora no.");
+
+      await sendWhatsAppMessage(
+        phone,
+        `Lamentamos que el problema continúe.
+
+¿Deseas que solicitemos la atención de un técnico?
+
+Responde:
+1️⃣ Sí, quiero hablar con un técnico.
+2️⃣ No, por ahora no.`
+      );
+
       return true;
     }
-    const reply = await getAIReply(phone, message);
-    await sendWhatsAppMessage(phone, `${reply}\n\nPara indicarme el resultado de la revisión, responde 1 si ya tienes Internet o 2 si sigues sin servicio.`);
-    return true;
+
+    return false;
   }
 
   if (offer.step === "request_technician") {
-    if (["1", "si", "si quiero", "quiero un tecnico", "necesito un tecnico", "tecnico"].includes(answer)) {
-      await offerHumanSupport(phone, "El cliente realizó la guía de conexión y continúa sin Internet. Solicita atención de un técnico.");
-      return true;
-    }
-    if (["2", "no", "no por ahora", "no gracias"].includes(answer)) {
+    if (
+      answer === "1" ||
+      answer.includes("si") ||
+      answer.includes("tecnico") ||
+      answer.includes("técnico")
+    ) {
       guideOffers.delete(phone);
-      await sendWhatsAppMessage(phone, "Entendido. Cuando necesites ayuda, aquí estaremos. Escribe MENU para ver las opciones.");
+
+      await offerHumanSupport(
+        phone,
+        "El cliente realizó la guía de conexión y continúa sin Internet. Solicita atención de un técnico."
+      );
+
       return true;
     }
-    const reply = await getAIReply(phone, message);
-    await sendWhatsAppMessage(phone, `${reply}\n\nResponde 1 para solicitar un técnico o 2 si no necesitas atención por ahora.`);
-    return true;
+
+    if (answer === "2" || answer === "no") {
+      guideOffers.delete(phone);
+
+      await sendWhatsAppMessage(
+        phone,
+        "Entendido. Cuando necesites ayuda, aquí estaremos. Escribe MENU para ver las opciones."
+      );
+
+      return true;
+    }
+
+    return false;
   }
+
   return false;
 }
 
 // DETECCIÓN DE SOLICITUD DE ASESOR O TÉCNICO
+// DETECCIÓN EXPLÍCITA DE FALLAS DE CONEXIÓN
+// Tiene prioridad sobre consultas de pago para evitar falsos positivos
+// en frases como "No tengo Internet desde el medio día".
+function isConnectionIssueIntent(message) {
+  const text = normalize(message);
+
+  // Reconoce expresiones naturales aunque el cliente agregue cuándo comenzó la falla.
+  const hasInternet = /\b(internet|conexion|servicio|wifi|senal|senal de internet)\b/.test(text);
+  const reportsOutage = /\b(no tengo|no hay|sin|se fue|perdi|se cayo|no funciona|no conecta|no me conecta|estoy sin|me quede sin|llevo.*sin)\b/.test(text);
+  const reportsIntermittent = /\b(lento|lentitud|cortes?|intermitente|se corta|se desconecta|falla|fallando|inestable)\b/.test(text);
+
+  return (hasInternet && (reportsOutage || reportsIntermittent)) ||
+    /\b(no tengo internet|sin internet|no hay internet|se fue el internet|me quede sin internet)\b/.test(text);
+}
+
+// CONSULTAS DE PAGO: exigir al menos un término inequívoco de pago.
+// "dia" o "internet" por sí solos nunca deben activar esta respuesta.
+function isPaymentQuestion(message) {
+  const text = normalize(message);
+  if (isConnectionIssueIntent(message)) return false;
+  const hasPaymentTerm = /\b(pago|pagos|pagar|pagado|mensualidad|mensualidades|mora|recargo|atraso|comprobante|transferencia|oxxo)\b/.test(text);
+  const hasPaymentQuestion = /\b(fecha|fechas|dia|dias|cuando|pago|pagos|pagar|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|costo|cuanto|metodo|donde)\b/.test(text);
+  return hasPaymentTerm && hasPaymentQuestion;
+}
+
 function isHumanSupportRequest(message) {
   const text = normalize(message);
 
@@ -958,9 +992,7 @@ function getSalesQuestionReply(session, message) {
   const normalized = normalize(message);
 
   // FECHAS DE PAGO, MORA Y POSIBLE SUSPENSION
-  const asksPaymentDates =
-    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalized) &&
-    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalized);
+  const asksPaymentDates = !isConnectionIssueIntent(message) && isPaymentQuestion(message);
 
   if (asksPaymentDates) {
     return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
@@ -1134,9 +1166,7 @@ Tu solicitud todavía no representa una instalación confirmada.`;
 // INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
   const normalizedMessage = normalize(message);
-  const asksPaymentDates =
-    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalizedMessage) &&
-    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalizedMessage);
+  const asksPaymentDates = isPaymentQuestion(message);
 
   if (asksPaymentDates) {
     return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
@@ -1156,7 +1186,11 @@ Te recomendamos pagar dentro del periodo establecido para evitar cargos adiciona
 
   const session = getConversation(phone);
 
+  const mexicoTime = getMexicoTimeContext();
   const instructions = `Eres el asesor virtual de PIT COMUNICACIONES, proveedor de Internet inalámbrico en La Libertad, Chiapas.
+
+HORA LOCAL DE MÉXICO: ${mexicoTime.time}. SALUDO Y DESPEDIDA ADECUADOS: ${mexicoTime.greeting}.
+REGLA DE HORARIO: usa "Buenos días" de 06:00 a 11:59, "Buenas tardes" de 12:00 a 18:59 y "Buenas noches" de 19:00 a 05:59. Aplica esta regla también a despedidas y frases como "que tengas...". Nunca uses "buen día" o "buenas tardes" si la hora local indica noche. No menciones la hora salvo que el cliente pregunte.
 
 INFORMACIÓN OFICIAL:
 ${JSON.stringify(businessInfo)}
@@ -1182,6 +1216,8 @@ REGLAS:
 - Para fallas persistentes solicita nombre, localidad, teléfono y descripción.
 - Nunca solicites contraseñas, códigos ni datos de tarjetas.
 - Si el cliente pregunta si puedes compartir una guía rápida para revisar cables, puedes ofrecerla.
+- Si el cliente hace una pregunta libre durante el diagnóstico, responde su duda de forma breve y amable; no reinicies la guía ni avances de paso por esa pregunta.
+- Si no sabes responder una duda técnica con certeza, indícalo y ofrece atención de un técnico.
 - Si el cliente acepta una guía, responde brevemente. El sistema enviará la guía paso a paso.
 - Nunca indiques presionar RESET, intercambiar cables POE/LAN ni manipular antena o cableado exterior.
 - Si no tienes certeza, dilo y deriva con un técnico.
@@ -1436,6 +1472,14 @@ app.post("/webhook", (req, res) => {
           continue;
         }
 
+        // FALLAS DE CONEXIÓN: priorizar antes de palabras como "día" o "servicio".
+        // Así "No tengo Internet desde el medio día" inicia la guía y no muestra pagos.
+        if (!guideSessions.has(from) && !guideOffers.has(from) && isConnectionIssueIntent(text)) {
+          paymentFollowups.delete(from);
+          startConnectionGuide(from).catch(console.error);
+          continue;
+        }
+
         // CONTINUAR DESPUÉS DE MOSTRAR INFORMACIÓN DE PAGOS
         if (paymentFollowups.has(from)) {
           const ack = ["gracias", "muchas gracias", "muy bien", "bien", "ok", "okay", "entendido", "perfecto", "esta bien", "de acuerdo"].includes(normalized);
@@ -1446,9 +1490,25 @@ app.post("/webhook", (req, res) => {
           paymentFollowups.delete(from);
         }
 
-        // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA PRIMERO
+        // SI EXISTE UNA GUÍA EN CURSO, PRIORIZAR SUS RESPUESTAS.
+        // Las preguntas distintas de SI/NO pasan a la IA sin borrar el paso actual.
         if (guideSessions.has(from)) {
-          handleConnectionGuide(from, text).catch(console.error);
+          handleConnectionGuide(from, text)
+            .then(async handled => {
+              if (handled) return;
+              const reply = await getAIReply(from, text);
+              if (isCustomerPaused(from)) return;
+              const current = guideSessions.get(from);
+              const stepHints = {
+                poe_check: "Cuando estés listo, dime si el cable negro está en POE y el gris en LAN.",
+                poe_gray_reseat: "Cuando termines de reconectar el cable gris en LAN, responde SI.",
+                router_check: "Cuando confirmes si el cable gris llega al puerto WAN del router, responde SI o NO.",
+                router_wan_reseat: "Cuando termines de reconectar el cable en WAN, responde SI."
+              };
+              const reminder = current ? stepHints[current.step] : "";
+              await sendWhatsAppMessage(from, reminder ? `${reply}\n\n${reminder}` : reply);
+            })
+            .catch(console.error);
           continue;
         }
 
@@ -1464,10 +1524,39 @@ app.post("/webhook", (req, res) => {
           }
         }
 
-        // OFERTA O RESULTADO DE LA GUÍA: manejar con su propio estado.
+        // RESULTADO FINAL DE LA GUÍA: procesarlo ANTES de cualquier aceptación genérica.
+        // Así un SI al confirmar que volvió Internet no reinicia la guía.
         if (guideOffers.has(from)) {
-          handleGuideOffer(from, text).catch(console.error);
-          continue;
+          const currentOffer = guideOffers.get(from);
+          if (currentOffer && typeof currentOffer === "object" && currentOffer.step) {
+            handleGuideOffer(from, text)
+              .then(async handled => {
+                if (handled) return;
+                const reply = await getAIReply(from, text);
+                if (isCustomerPaused(from)) return;
+                const stillOpen = guideOffers.get(from);
+                let reminder = "";
+                if (stillOpen?.step === "internet_result") {
+                  reminder = "Cuando gustes, dime si ya puedes navegar: 1 para SI o 2 para NO.";
+                } else if (stillOpen?.step === "request_technician") {
+                  reminder = "Cuando gustes, responde 1 para solicitar un técnico o 2 si no necesitas atención por ahora.";
+                }
+                await sendWhatsAppMessage(from, reminder ? `${reply}\n\n${reminder}` : reply);
+              })
+              .catch(console.error);
+            continue;
+          }
+
+          // Oferta previa de guía generada por IA (todavía no iniciada).
+          if (isYes(text)) {
+            startConnectionGuide(from).catch(console.error);
+            continue;
+          }
+          if (isNo(text)) {
+            guideOffers.delete(from);
+            sendWhatsAppMessage(from, "De acuerdo. Si necesitas revisar tu conexión, escribe MENU y selecciona la opción 1.").catch(console.error);
+            continue;
+          }
         }
 
         // ACEPTACIÓN DE UNA OFERTA DE CONTRATACIÓN GENERADA POR LA IA
@@ -1571,7 +1660,7 @@ app.post("/webhook", (req, res) => {
               );
 
             if (offersGuide) {
-              guideOffers.set(from, { step: "accept_guide", updatedAt: Date.now() });
+              guideOffers.set(from, Date.now());
             }
 
             await sendWhatsAppMessage(from, reply);
