@@ -30,6 +30,8 @@ const salesSessions = new Map();
 const salesOffers = new Map();
 const guideSessions = new Map();
 const guideOffers = new Map();
+const paymentFollowups = new Map();
+const supportSessions = new Map();
 
 const MEMORY_LIMIT = 12;
 const SESSION_TTL = 24 * 60 * 60 * 1000;
@@ -332,176 +334,191 @@ async function sendWhatsAppImage(to, imageUrl, caption) {
 // GUÍA DE CONEXIÓN PASO A PASO
 async function startConnectionGuide(phone) {
   guideOffers.delete(phone);
+  guideSessions.set(phone, { step: "poe_check", updatedAt: Date.now() });
 
-  guideSessions.set(phone, {
-    step: "poe",
-    updatedAt: Date.now()
-  });
+  await sendWhatsAppMessage(phone, `📡 *VAMOS A REVISAR TU CONEXIÓN*
 
-  await sendWhatsAppMessage(
-    phone,
-    `📡 *VAMOS A REVISAR TU CONEXIÓN*
+Te ayudaré paso a paso. No haremos todos los pasos de golpe; esperaré tu respuesta antes de continuar.
 
-Te ayudaré paso a paso.
+Primero revisaremos el adaptador PoE. Observa la fotografía y por ahora no desconectes nada.`);
 
-Primero revisaremos el adaptador PoE de tu instalación.
+  await sendWhatsAppImage(phone, POE_IMAGE_URL, `🔌 *PASO 1. VERIFICAR LOS PUERTOS DEL ADAPTADOR PoE*
 
-Observa la siguiente fotografía. No desconectes nada todavía.`
-  );
+Identifica los dos cables:
 
-  await sendWhatsAppImage(
-    phone,
-    POE_IMAGE_URL,
-    `🔌 *PASO 1. ADAPTADOR PoE*
+⚫ *Cable negro:* es el que viene de la antena y debe estar conectado en el puerto que dice *POE*.
 
-Identifica los dos cables de red:
+⚪ *Cable gris:* debe estar conectado en el puerto que dice *LAN*.
 
-⚫ *Cable negro:* conectado en el puerto que dice *POE*.
+Verifica que estén conectados exactamente así.
 
-⚪ *Cable gris:* conectado en el puerto que dice *LAN*.
+¿El cable negro está en POE y el cable gris en LAN?
 
-Cuando hayas identificado ambos cables, responde *SI* para continuar.`
-  );
+Responde *SI* o *NO*.`);
 }
 
 // CONTROL DE LA GUÍA
 async function handleConnectionGuide(phone, message) {
   const session = guideSessions.get(phone);
-
   if (!session) return false;
-
   const answer = normalize(message);
 
   if (answer === "cancelar") {
     guideSessions.delete(phone);
-        await sendWhatsAppMessage(
-      phone,
-      "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU."
-    );
-
+    await sendWhatsAppMessage(phone, "De acuerdo. Hemos detenido la guía. Si necesitas ayuda, escribe MENU. También puedes escribir ASESOR o TECNICO para solicitar ayuda.");
     return true;
   }
 
-  if (session.step === "poe") {
+  if (isHumanSupportRequest(message) || ["asesor", "tecnico"].includes(answer)) {
+    await offerHumanSupport(phone, "El cliente solicita atención personal durante la guía de conexión.");
+    return true;
+  }
+
+  if (!isYes(answer) && !isNo(answer)) {
+    const prompts = {
+      poe_check: "Responde SI si el cable negro está en POE y el gris en LAN, o NO si no están así.",
+      poe_black_reseat: "Cuando hayas desconectado y vuelto a conectar el cable negro en el mismo puerto POE, responde SI. Si todavía no lo haces, responde NO.",
+      poe_gray_reseat: "Cuando hayas desconectado y vuelto a conectar el cable gris en el mismo puerto LAN, responde SI. Si todavía no lo haces, responde NO.",
+      router_check: "Responde SI si el cable gris que viene del PoE está conectado en WAN, o NO si está conectado en otro puerto.",
+      router_wan_reseat: "Cuando hayas desconectado y vuelto a conectar el cable gris en el mismo puerto WAN, responde SI. Si todavía no lo haces, responde NO."
+    };
+    await sendWhatsAppMessage(phone, (prompts[session.step] || "Por favor responde SI o NO para continuar.") + "\n\nEn cualquier momento puedes escribir ASESOR o TECNICO para solicitar ayuda.");
+    return true;
+  }
+
+  if (session.step === "poe_check") {
     if (isNo(answer)) {
-      await sendWhatsAppMessage(
-        phone,
-        "No hay problema. Revisa con cuidado los cables del adaptador PoE. No desconectes nada. Cuando estés listo, responde SI. Si no identificas los puertos, solicita ayuda de un técnico."
-      );
-
+      await sendWhatsAppMessage(phone, `Revisa la conexión del adaptador PoE:\n\n⚫ El cable negro que viene de la antena debe ir en *POE*.\n⚪ El cable gris que va hacia el router debe ir en *LAN*.\n\nSi alguno está en un puerto incorrecto, colócalo en el puerto indicado. No manipules el cable instalado en el exterior ni la antena.\n\nCuando ambos estén correctamente conectados, responde *SI*.`);
+      session.updatedAt = Date.now();
       return true;
     }
-
-    if (!isYes(answer)) {
-      await sendWhatsAppMessage(
-        phone,
-        "Para continuar con la revisión, responde SI cuando hayas identificado los puertos POE y LAN. Si deseas detener la guía, escribe CANCELAR."
-      );
-
-      return true;
-    }
-
-    session.step = "router";
+    session.step = "poe_black_reseat";
     session.updatedAt = Date.now();
-
-    await sendWhatsAppMessage(
-      phone,
-      `✅ *PASO 1 COMPLETADO*
-
-Ahora revisaremos el cable que llega a tu router.
-
-Observa la siguiente imagen.`
-    );
-
-    await sendWhatsAppImage(
-      phone,
-      ROUTER_IMAGE_URL,
-      `📶 *PASO 2. REVISAR EL ROUTER*
-
-Verifica que el cable de red que viene del adaptador PoE esté conectado en el puerto *WAN* de tu router.
-
-⚠️ No cambies los cables de lugar.
-⚠️ No presiones el botón RESET.
-⚠️ No desconectes el cable de la antena.
-
-Cuando hayas revisado la conexión, responde *SI*.`
-    );
-
+    await sendWhatsAppMessage(phone, `✅ Gracias. Confirmamos que los cables están en los puertos correctos.\n\n*PASO 2. DESCONECTAR Y CONECTAR EL CABLE NEGRO*\n\n1. Ubica el cable negro conectado en el puerto *POE* del adaptador.\n2. Desconéctalo del puerto *POE*.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectarlo en el mismo puerto *POE*.\n\nNo desconectes el cable de la antena ni muevas ningún otro cable.\n\nCuando termines, responde *SI*. Si necesitas ayuda, escribe *ASESOR*.`);
     return true;
   }
 
-  if (session.step === "router") {
+  if (session.step === "poe_black_reseat") {
     if (isNo(answer)) {
-      await sendWhatsAppMessage(
-        phone,
-        "Está bien. Revisa que el cable que viene del PoE llegue al puerto WAN del router. No cambies otros cables. Cuando termines, responde SI."
-      );
-
+      await sendWhatsAppMessage(phone, "Está bien. Desconecta únicamente el cable negro del puerto POE, espera 10 segundos y vuelve a conectarlo en ese mismo puerto. Cuando termines, responde SI.");
       return true;
     }
-
-    if (!isYes(answer)) {
-      await sendWhatsAppMessage(
-        phone,
-        "Necesito que respondas SI cuando hayas revisado el puerto WAN del router, o NO si todavía necesitas revisarlo. Escribe CANCELAR para detener la guía."
-      );
-
-      return true;
-    }
-
-    guideSessions.delete(phone);
-
-    await sendWhatsAppMessage(
-      phone,
-      `✅ *REVISIÓN COMPLETADA*
-
-Ahora verifica si tus dispositivos ya tienen Internet.
-
-¿Ya puedes navegar?
-
-Responde:
-1️⃣ SI, ya tengo Internet.
-2️⃣ NO, sigo sin Internet.
-
-Si el problema continúa, podemos solicitar la atención de un técnico.`
-    );
-
-    guideOffers.set(phone, {
-      step: "internet_result",
-      updatedAt: Date.now()
-    });
-
+    session.step = "poe_gray_reseat";
+    session.updatedAt = Date.now();
+    await sendWhatsAppMessage(phone, `✅ Muy bien.\n\n*PASO 3. DESCONECTAR Y CONECTAR EL CABLE GRIS DEL PoE*\n\n1. Ubica el cable gris conectado en el puerto *LAN* del adaptador PoE.\n2. Desconéctalo del puerto *LAN*.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectarlo en el mismo puerto *LAN*.\n\nNo lo conectes en POE ni en otro puerto.\n\nCuando termines, responde *SI*.`);
     return true;
   }
 
+  if (session.step === "poe_gray_reseat") {
+    if (isNo(answer)) {
+      await sendWhatsAppMessage(phone, "No hay problema. Desconecta el cable gris del puerto LAN, espera 10 segundos y vuelve a conectarlo en el mismo puerto LAN. Cuando termines, responde SI.");
+      return true;
+    }
+    session.step = "router_check";
+    session.updatedAt = Date.now();
+    await sendWhatsAppMessage(phone, `✅ Listo. Ahora revisaremos el router.\n\n*PASO 4. VERIFICAR EL PUERTO WAN DEL ROUTER*\n\nEl cable gris que viene del puerto *LAN* del adaptador PoE debe llegar al puerto *WAN* del router.\n\n⚠️ Debe estar conectado en *WAN* o *Internet*, no en uno de los puertos *LAN*. Si está conectado en otro puerto, el router podría no recibir Internet correctamente.\n\nObserva la imagen y verifica la conexión.\n\n¿El cable gris que viene del PoE está conectado en el puerto *WAN* del router?\n\nResponde *SI* o *NO*.`);
+    await sendWhatsAppImage(phone, ROUTER_IMAGE_URL, "📶 Identifica el puerto marcado como WAN o Internet en tu router. No presiones RESET ni cambies otros cables.");
+    return true;
+  }
+
+  if (session.step === "router_check") {
+    if (isNo(answer)) {
+      await sendWhatsAppMessage(phone, `Revisa el cable gris que viene del adaptador PoE y asegúrate de que llegue al puerto *WAN* o *Internet* del router.\n\nSi está conectado en un puerto LAN, con cuidado colócalo en el puerto WAN. No presiones RESET ni desconectes otros cables.\n\nCuando esté conectado en WAN, responde *SI*.`);
+      return true;
+    }
+    session.step = "router_wan_reseat";
+    session.updatedAt = Date.now();
+    await sendWhatsAppMessage(phone, `✅ Correcto.\n\n*PASO 5. DESCONECTAR Y CONECTAR EL CABLE DEL PUERTO WAN*\n\n1. Ubica el cable gris que viene del adaptador PoE y está conectado en *WAN*.\n2. Desconéctalo del puerto *WAN* del router.\n3. Espera aproximadamente 10 segundos.\n4. Vuelve a conectarlo en el mismo puerto *WAN*.\n\nNo lo conectes en un puerto LAN y no presiones RESET.\n\nCuando termines, responde *SI*.`);
+    return true;
+  }
+
+  if (session.step === "router_wan_reseat") {
+    if (isNo(answer)) {
+      await sendWhatsAppMessage(phone, "Está bien. Desconecta el cable gris del puerto WAN, espera 10 segundos y vuelve a conectarlo en ese mismo puerto WAN. Cuando termines, responde SI.");
+      return true;
+    }
+    guideSessions.delete(phone);
+    guideOffers.set(phone, { step: "internet_result", updatedAt: Date.now() });
+    await sendWhatsAppMessage(phone, `✅ *PASOS DE CONEXIÓN COMPLETADOS*\n\nEspera aproximadamente un minuto para que los equipos recuperen la conexión.\n\nAhora comprueba si tus dispositivos ya tienen Internet.\n\n¿Ya puedes navegar?\n\nResponde:\n1️⃣ *SI*, ya tengo Internet.\n2️⃣ *NO*, sigo sin Internet.\n\nSi el problema continúa, podemos solicitar la atención de un técnico. También puedes escribir *ASESOR* o *TECNICO* en cualquier momento.`);
+    return true;
+  }
   return false;
 }
 
-// OFRECER ATENCIÓN DE UN ASESOR
+// OFRECER ATENCIÓN DE UN ASESOR O TÉCNICO
 async function offerHumanSupport(phone, reason) {
   salesOffers.delete(phone);
   guideOffers.delete(phone);
   guideSessions.delete(phone);
   salesSessions.delete(phone);
+  paymentFollowups.delete(phone);
+
+  supportSessions.set(phone, {
+    step: "name",
+    name: "",
+    locality: "",
+    reason: String(reason || "El cliente solicita atención personalizada."),
+    updatedAt: Date.now()
+  });
 
   await sendWhatsAppMessage(
     phone,
-    `👨‍🔧 *ATENCIÓN PERSONALIZADA*
-
-Con gusto podemos ayudarte.
-
-Voy a solicitar que un asesor o técnico de PIT COMUNICACIONES revise tu caso.
-
-Para canalizar correctamente tu solicitud, por favor indícanos:
-
-1️⃣ Tu nombre completo.
-2️⃣ Tu localidad o colonia.
-3️⃣ ¿Necesitas atención de un asesor o de un técnico?
-
-Motivo de la solicitud: ${reason}
-
-Un integrante de nuestro equipo dará seguimiento dentro de nuestro horario de atención.`
+    `👨‍🔧 *ATENCIÓN PERSONALIZADA – PIT COMUNICACIONES*\n\nCon gusto canalizamos tu solicitud. Para que nuestro equipo pueda identificar tu caso, primero indícanos tu *nombre completo*.`
   );
+}
+
+async function handleSupportSession(phone, message) {
+  const session = supportSessions.get(phone);
+  if (!session) return false;
+  const answer = String(message || "").trim();
+  const normalized = normalize(answer);
+
+  if (normalized === "cancelar") {
+    supportSessions.delete(phone);
+    await sendWhatsAppMessage(phone, "De acuerdo, hemos detenido la solicitud de atención. Cuando necesites ayuda, escribe ASESOR o TECNICO.");
+    return true;
+  }
+
+  if (session.step === "name") {
+    if (answer.length < 5 || !/[a-záéíóúñ]/i.test(answer) || /^(hola|buenas|asesor|tecnico|si|no)$/i.test(answer)) {
+      await sendWhatsAppMessage(phone, "Por favor, escribe tu nombre completo y apellidos para registrar la solicitud.");
+      return true;
+    }
+    session.name = answer;
+    session.step = "locality";
+    session.updatedAt = Date.now();
+    await sendWhatsAppMessage(phone, `Gracias, ${session.name}. 😊\n\nAhora indícame tu *localidad, colonia o ejido*.`);
+    return true;
+  }
+
+  if (session.step === "locality") {
+    if (answer.length < 3) {
+      await sendWhatsAppMessage(phone, "Por favor, indícame el nombre de tu localidad, colonia o ejido.");
+      return true;
+    }
+    session.locality = answer;
+    session.step = "type";
+    session.updatedAt = Date.now();
+    await sendWhatsAppMessage(phone, "¿Qué tipo de atención necesitas? Responde *ASESOR* para atención administrativa/ventas o *TECNICO* para una falla de Internet o instalación.");
+    return true;
+  }
+
+  if (session.step === "type") {
+    let supportType = "";
+    if (["asesor", "ventas", "administrativo"].includes(normalized)) supportType = "Asesor";
+    if (["tecnico", "tecnica", "soporte", "falla", "internet"].includes(normalized)) supportType = "Técnico";
+    if (!supportType) {
+      await sendWhatsAppMessage(phone, "Por favor responde *ASESOR* o *TECNICO* para indicar qué tipo de atención necesitas.");
+      return true;
+    }
+
+    const summary = `SOLICITUD DE ATENCIÓN PIT COMUNICACIONES\nNombre: ${session.name}\nTeléfono: ${phone}\nLocalidad: ${session.locality}\nTipo: ${supportType}\nMotivo: ${session.reason}`;
+    console.log("NUEVA SOLICITUD DE ATENCIÓN:\\n" + summary);
+    supportSessions.delete(phone);
+    await sendWhatsAppMessage(phone, `✅ *DATOS DE ATENCIÓN RECIBIDOS*\n\nNombre: ${session.name}\nLocalidad: ${session.locality}\nAtención solicitada: ${supportType}\n\nHemos registrado los datos de tu solicitud para que el equipo de PIT COMUNICACIONES pueda revisarlos. La atención se dará dentro del horario de servicio.\n\nSi necesitas agregar información, puedes responder a este chat.`);
+    return true;
+  }
+  return true;
 }
 
 // RESPUESTA DE LA GUÍA Y SOLICITUD DE TÉCNICO
@@ -1312,6 +1329,14 @@ setInterval(() => {
     }
   }
 
+  for (const [phone, session] of paymentFollowups.entries()) {
+    if (now - session.updatedAt > SESSION_TTL) paymentFollowups.delete(phone);
+  }
+
+  for (const [phone, session] of supportSessions.entries()) {
+    if (now - session.updatedAt > SESSION_TTL) supportSessions.delete(phone);
+  }
+
   for (const [phone, session] of salesSessions.entries()) {
     if (now - session.updatedAt > SESSION_TTL) {
       salesSessions.delete(phone);
@@ -1324,6 +1349,22 @@ setInterval(() => {
     }
   }
 }, 60 * 1000);
+
+// SEGUIMIENTO DESPUÉS DE INFORMACIÓN DE PAGOS
+function startPaymentFollowup(phone) {
+  paymentFollowups.set(phone, { updatedAt: Date.now() });
+}
+
+async function handlePaymentFollowup(phone, message) {
+  const answer = normalize(message);
+  if (isHumanSupportRequest(message) || ["asesor", "tecnico"].includes(answer)) {
+    paymentFollowups.delete(phone);
+    await offerHumanSupport(phone, "El cliente solicita ayuda después de consultar la información de pagos.");
+    return true;
+  }
+  await sendWhatsAppMessage(phone, `¡Con gusto! 😊 Estamos para ayudarte.\n\n¿Necesitas algo más?\n\n1️⃣ Reportar un problema de Internet.\n2️⃣ Consultar planes y precios.\n👨‍🔧 Escribe *ASESOR* para hablar con una persona.\n🏠 Escribe *MENU* para regresar al menú principal.\n\nTambién puedes contarme qué necesitas.`);
+  return true;
+}
 
 // VERIFICACIÓN WEBHOOK
 app.get("/webhook", (req, res) => {
@@ -1382,10 +1423,34 @@ app.post("/webhook", (req, res) => {
           guideOffers.delete(from);
           salesSessions.delete(from);
           salesOffers.delete(from);
+          paymentFollowups.delete(from);
+          supportSessions.delete(from);
           conversations.delete(from);
 
           sendWhatsAppMessage(from, mainMenu()).catch(console.error);
           continue;
+        }
+
+        // CONTINUAR CAPTURA DE DATOS PARA ASESOR O TÉCNICO
+        if (supportSessions.has(from)) {
+          handleSupportSession(from, text).catch(console.error);
+          continue;
+        }
+
+        // SOLICITUD DIRECTA DE ASESOR O TÉCNICO
+        if (isHumanSupportRequest(text) || ["asesor", "tecnico"].includes(normalized)) {
+          offerHumanSupport(from, "El cliente solicita atención personalizada.").catch(console.error);
+          continue;
+        }
+
+        // CONTINUAR DESPUÉS DE MOSTRAR INFORMACIÓN DE PAGOS
+        if (paymentFollowups.has(from)) {
+          const ack = ["gracias", "muchas gracias", "muy bien", "bien", "ok", "okay", "entendido", "perfecto", "esta bien", "de acuerdo"].includes(normalized);
+          if (ack || isHumanSupportRequest(text) || ["asesor", "tecnico"].includes(normalized)) {
+            handlePaymentFollowup(from, text).catch(console.error);
+            continue;
+          }
+          paymentFollowups.delete(from);
         }
 
         // SI EXISTE UNA GUÍA EN CURSO, ATENDERLA PRIMERO
@@ -1457,7 +1522,14 @@ app.post("/webhook", (req, res) => {
         const fixedReply = getMenuReply(text);
 
         if (fixedReply) {
-          if (normalized === "5") startSales(from);
+          if (normalized === "7") {
+            offerHumanSupport(from, "El cliente seleccionó la opción de hablar con un técnico.").catch(console.error);
+            continue;
+          }
+          if (normalized === "3" || ["pagos", "pago", "informacion sobre pagos", "informacion de pagos"].includes(normalized)) {
+            startPaymentFollowup(from);
+          }
+          if (normalized === "5") startSalesSession(from);
 
           saveConversation(from, "user", text);
           saveConversation(from, "assistant", fixedReply);
@@ -1550,7 +1622,7 @@ app.get("/health", (_req, res) => {
     manualPauseStoragePath: DATA_DIR,
     activeManualPauses: manualPauses.size,
     visualSupport: true,
-    guideMode: "step-by-step",
+    guideMode: "step-by-step-poe-router-reseat",
     poeImageConfigured: Boolean(POE_IMAGE_URL),
     routerImageConfigured: Boolean(ROUTER_IMAGE_URL)
   });
