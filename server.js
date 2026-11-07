@@ -123,6 +123,14 @@ const businessInfo = {
     "Transferencia bancaria",
     "Depósito en OXXO"
   ],
+  paymentPolicy: {
+    paymentStartDay: 15,
+    paymentEndDay: 20,
+    lateFeeStartDay: 21,
+    lateFeeMXN: 30,
+    suspensionPossible: true,
+    description: "Los pagos mensuales deben realizarse del día 15 al 20 de cada mes. A partir del día 21 se cobran $30 MXN adicionales por mora y el servicio puede ser suspendido."
+  },
   supportHours: {
     mondayToFriday: "07:00 a 18:00",
     saturday: "07:00 a 14:00",
@@ -168,7 +176,6 @@ function getConversation(phone) {
   session.updatedAt = Date.now();
   return session;
 }
-
 function sessionTextForSales(phone, currentMessage) {
   const session = getConversation(phone);
 
@@ -360,7 +367,6 @@ async function handleConnectionGuide(phone, message) {
 
     session.step = "router";
     session.updatedAt = Date.now();
-
     await sendWhatsAppMessage(
       phone,
       `🔌 *PASO 2. CONEXIONES DEL ADAPTADOR PoE*
@@ -532,9 +538,7 @@ Vamos a revisar tu conexión.
 
 No presiones el botón RESET.
 
-Si continúa lento, escribe *TECNICO*.`;
-
-    case "3":
+Si continúa     case "3":
       return `💳 *INFORMACIÓN DE PAGOS*
 
 Puedes realizar tu pago mediante:
@@ -542,6 +546,13 @@ Puedes realizar tu pago mediante:
 💵 Efectivo.
 🏦 Transferencia bancaria.
 🏪 Depósito en OXXO.
+
+📅 *FECHAS DE PAGO*
+Del día 15 al 20 de cada mes.
+
+⚠️ A partir del día 21 se cobran $30 MXN adicionales por mora.
+
+🚫 El servicio podrá ser suspendido si no se realiza el pago.
 
 Si realizas un pago, envíanos tu nombre completo y una fotografía del comprobante.
 
@@ -647,8 +658,7 @@ function getMentionedLocalities(text) {
   }
 
   return [...new Set(found)];
-}
-
+}lento, escribe *TECNICO*.`;
 // PROCESAR ACEPTACIÓN DE CONTRATACIÓN
 function handleSalesOfferAcceptance(phone, message) {
   const offer = salesOffers.get(phone);
@@ -703,28 +713,42 @@ Para continuar con tu contratación, ¿me compartes tu nombre completo?`;
 function getSalesQuestionReply(session, message) {
   const normalized = normalize(message);
 
-  // CONSULTAS SOBRE OTROS PLANES: OFRECER ATENCION DE VENTAS.
+  // FECHAS DE PAGO, MORA Y POSIBLE SUSPENSION
+  const asksPaymentDates =
+    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalized) &&
+    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalized);
+
+  if (asksPaymentDates) {
+    return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
+
+📅 Los pagos deben realizarse del día *15 al 20 de cada mes*.
+
+⚠️ A partir del día 21 se cobran *$30 MXN adicionales por mora* a la mensualidad.
+
+🚫 Si no se realiza el pago, el servicio podrá ser suspendido.
+
+Te recomendamos pagar dentro del periodo establecido para evitar cargos adicionales o interrupciones.
+
+${salesPendingPrompt(session)}`;
+  }
+
+  // CONSULTAS SOBRE OTROS PLANES: DERIVAR A VENTAS
   const asksOtherPlans =
     /\b(otro|otra|otros|otras)\b.*\b(plan|planes|paquete|paquetes|servicio|opcion|opciones)\b|\b(plan|planes|paquete|paquetes)\b.*\b(otro|otra|diferente|diferentes|adicional|adicionales|aparte|distinto|distintos)\b|\b(tienen|manejan|cuentan|ofrecen|hay|existe|existen|disponen|trabajan)\b.*\b(plan|planes|paquete|paquetes|opcion|opciones)\b|\b(que|cuales)\b.*\b(plan|planes|paquete|paquetes)\b|\bmas opciones\b|\botras opciones\b|\balgun(a|o|os|as)?\b.*\b(plan|planes|paquete|paquetes)\b/.test(normalized);
-
-  const asksMonthly =
-    /mensualidad|mensualidades|cuanto cuesta.*(mes|mensual)|precio.*(mes|mensual)|costo.*(mes|mensual)|pago mensual/.test(normalized);
-
-  const asksPlan =
-    /plan familiar|planes|precio.*internet|costo.*internet|cuanto cuesta.*internet|velocidad|cuantos megas|cuantos mbps/.test(normalized);
-
-  const asksInstallation =
-    /instalacion|instalar|costo.*instalacion|precio.*instalacion/.test(normalized);
 
   if (asksOtherPlans) {
     return `¡Claro! 😊
 
 Para conocer si contamos con otros planes o paquetes, te recomendamos solicitar hablar con un *asesor de ventas de PIT COMUNICACIONES*. Él podrá brindarte información más detallada y confirmar las opciones disponibles.
 
-Escribe *ASESOR DE VENTAS* para solicitar atención comercial por este mismo WhatsApp. Nuestro equipo podrá continuar contigo.
+Escribe *ASESOR DE VENTAS* para solicitar atención comercial por este mismo WhatsApp.
 
 ${salesPendingPrompt(session)}`;
   }
+
+  const asksMonthly = /mensualidad|mensualidades|cuanto cuesta.*(mes|mensual)|precio.*(mes|mensual)|costo.*(mes|mensual)|pago mensual/.test(normalized);
+  const asksPlan = /plan familiar|planes|precio.*internet|costo.*internet|cuanto cuesta.*internet|velocidad|cuantos megas|cuantos mbps/.test(normalized);
+  const asksInstallation = /instalacion|instalar|costo.*instalacion|precio.*instalacion/.test(normalized);
 
   if (asksMonthly || asksPlan) {
     return `📡 *PLAN FAMILIAR PIT COMUNICACIONES*
@@ -734,15 +758,17 @@ ${salesPendingPrompt(session)}`;
 💰 *$350 MXN mensuales.*
 ♾️ Sin límite de navegación.
 
-${salesPendingPrompt(session)}`;
+` + salesPendingPrompt(session);
   }
 
   if (asksInstallation) {
     const fee = session.locality ? getInstallationFee(session.locality) : null;
     const feeText = fee !== null
       ? `La instalación en ${session.locality} cuesta $${fee} MXN.`
-      : "El costo de instalación depende de la localidad. Un técnico debe confirmar cobertura y precio.";
-    return `${feeText}\n\n${salesPendingPrompt(session)}`;
+      : "El costo de instalación depende de la localidad. En otras comunidades, un técnico debe confirmar cobertura y precio.";
+    return `${feeText}
+
+${salesPendingPrompt(session)}`;
   }
 
   return null;
@@ -756,7 +782,7 @@ function salesPendingPrompt(session) {
 
 function looksLikeQuestion(text) {
   const normalized = normalize(text);
-  return /[?¿]/.test(text) || /^(que|cual|cuanto|cuantos|como|cuando|donde|por que|porque|y las|y la|y el|aceptan|tienen|manejan|cuenta(n)?|ofrecen|hay|existe(n)?|cuesta|costo|precio|mensualidad|mensualidades|plan|paquete|velocidad)\b/.test(normalized);
+  return /[?¿]/.test(text) || /^(que|cual|cuanto|cuantos|como|cuando|donde|por que|porque|y las|y la|y el|aceptan|tienen|manejan|cuesta|costo|precio|mensualidad|mensualidades|plan|velocidad)\b/.test(normalized);
 }
 
 function handleSales(phone, message) {
@@ -779,13 +805,8 @@ function handleSales(phone, message) {
   session.updatedAt = Date.now();
 
   const normalizedMessage = normalize(text);
-
   if (/^(asesor|asesor de ventas|ventas|hablar con asesor)$/.test(normalizedMessage)) {
-    return `Con gusto. Tu consulta es para el área de *ventas*.
-
-Para recibir información sobre otros planes, solicita atención con un asesor de ventas de PIT COMUNICACIONES por este mismo WhatsApp.
-
-${salesPendingPrompt(session)}`;
+    return `Con gusto. Tu consulta es para el área de *ventas* de PIT COMUNICACIONES. Nuestro equipo podrá brindarte información sobre las opciones disponibles.\n\n${salesPendingPrompt(session)}`;
   }
 
   const salesQuestionReply = getSalesQuestionReply(session, text);
@@ -864,9 +885,25 @@ Tu solicitud todavía no representa una instalación confirmada.`;
 
   return null;
 }
-
 // INTELIGENCIA ARTIFICIAL
 async function getAIReply(phone, message) {
+  const normalizedMessage = normalize(message);
+  const asksPaymentDates =
+    /\b(fecha|fechas|dia|dias|cuando|pagar|pago|pagos|mensualidad|mensualidades|mora|recargo|atraso|suspension|suspender|corte|cortan)\b/.test(normalizedMessage) &&
+    /\b(pago|pagos|mensualidad|mensualidades|fecha|fechas|mora|recargo|atraso|servicio|internet|mes)\b/.test(normalizedMessage);
+
+  if (asksPaymentDates) {
+    return `💳 *FECHAS DE PAGO – PIT COMUNICACIONES*
+
+📅 Los pagos deben realizarse del día *15 al 20 de cada mes*.
+
+⚠️ A partir del día 21 se cobran *$30 MXN adicionales por mora* a la mensualidad.
+
+🚫 Si no se realiza el pago, el servicio podrá ser suspendido.
+
+Te recomendamos pagar dentro del periodo establecido para evitar cargos adicionales o interrupciones.`;
+  }
+
   if (!OPENAI_API_KEY) {
     return "Por el momento no puedo responder esa consulta. Escribe MENU para ver las opciones o TECNICO para solicitar atención.";
   }
@@ -877,6 +914,7 @@ async function getAIReply(phone, message) {
 
 INFORMACIÓN OFICIAL:
 ${JSON.stringify(businessInfo)}
+
 REGLAS:
 - Responde en español mexicano, de forma amable, natural y breve.
 - Mantén el contexto de la conversación.
@@ -886,6 +924,12 @@ REGLAS:
 - No inventes planes, precios, promociones, cobertura ni fechas.
 - Instalación: La Libertad $600, Emiliano Zapata $800, Ejido Morelos $1,200.
 - En otras localidades un técnico debe confirmar cobertura y costo.
+- Los pagos mensuales deben realizarse del día 15 al 20 de cada mes.
+- A partir del día 21 se cobran $30 MXN adicionales por mora a la mensualidad.
+- Si no se realiza el pago, el servicio podrá ser suspendido.
+- Nunca digas que el cliente puede pagar cualquier día del mes sin recargo.
+- No inventes otras fechas, cargos o políticas de pago.
+- Si el cliente pregunta por fechas de pago, mora o suspensión, informa exactamente la política anterior.
 - Si el cliente quiere contratar, pregunta primero su localidad. Después solicita nombre completo y dirección, paso a paso.
 - No confirmes instalaciones ni pagos.
 - Métodos de pago: efectivo, transferencia y depósito OXXO.
@@ -978,7 +1022,6 @@ function isCustomerPaused(phone) {
 
   return true;
 }
-
 // DETECCIÓN DE MENSAJES MANUALES
 function processManualMessageEchoes(change) {
   if (change.field !== "smb_message_echoes") return;
@@ -1096,6 +1139,7 @@ app.post("/webhook", (req, res) => {
         }
 
         const normalized = normalize(text);
+
         // MENÚ PRINCIPAL
         if (["menu", "inicio"].includes(normalized)) {
           guideSessions.delete(from);
