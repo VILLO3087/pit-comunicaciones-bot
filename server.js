@@ -615,6 +615,24 @@ Responde:
   return false;
 }
 
+// DETECCIÓN DIRECTA DE CLIENTES SIN INTERNET
+// Estas expresiones deben iniciar la guía técnica y no pasar primero por la IA
+// ni por el flujo de captura de reportes.
+function isNoInternetIntent(message) {
+  const text = normalize(message);
+  return (
+    /\bno tengo internet\b/.test(text) ||
+    /\bno hay internet\b/.test(text) ||
+    /\bsin internet\b/.test(text) ||
+    /\bme quede sin internet\b/.test(text) ||
+    /\bse fue el internet\b/.test(text) ||
+    /\bno tengo servicio de internet\b/.test(text) ||
+    /\bsin servicio de internet\b/.test(text) ||
+    /\binternet no funciona\b/.test(text) ||
+    /\bno funciona el internet\b/.test(text)
+  );
+}
+
 // DETECCIÓN DE SOLICITUD DE ASESOR O TÉCNICO
 function isHumanSupportRequest(message) {
   const text = normalize(message);
@@ -1459,6 +1477,14 @@ app.post("/webhook", (req, res) => {
           continue;
         }
 
+        // CUALQUIER FORMA NATURAL DE DECIR QUE NO TIENE INTERNET
+        // inicia directamente el diagnóstico paso a paso. No solicitar primero
+        // nombre, localidad ni descripción: esos datos se piden si la guía falla.
+        if (isNoInternetIntent(text)) {
+          startConnectionGuide(from).catch(console.error);
+          continue;
+        }
+
         // SI HAY UNA CONTRATACIÓN ACTIVA, SUS MENSAJES TIENEN PRIORIDAD.
         // Así una pregunta de precio no se confunde con nombre/dirección ni pasa al flujo de soporte.
         if (salesSessions.has(from)) {
@@ -1622,7 +1648,7 @@ app.get("/health", (_req, res) => {
     manualPauseStoragePath: DATA_DIR,
     activeManualPauses: manualPauses.size,
     visualSupport: true,
-    guideMode: "step-by-step-poe-router-reseat",
+    guideMode: "step-by-step-poe-router-reseat-natural-no-internet-intent",
     poeImageConfigured: Boolean(POE_IMAGE_URL),
     routerImageConfigured: Boolean(ROUTER_IMAGE_URL)
   });
