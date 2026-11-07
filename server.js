@@ -1,6 +1,7 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.1 (revisión completa)
+// Versión V8.2 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
+// V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -288,8 +289,13 @@ function isHumanSupportRequest(message) {
 }
 
 function looksLikeQuestion(text) {
-  const normalized = clean(text);
-  return /[?¿]/.test(text) || /^(que|cual|cuales|cuanto|cuantos|como|cuando|donde|por que|porque|y las|y la|y el|aceptan|tienen|manejan|cuesta|costo|precio|mensualidad|mensualidades|plan|velocidad|puedo|se puede|hay)\b/.test(normalized);
+  const normalized = clean(text).replace(/^(pero|oye|oiga|y|ah|ok|okay|disculpe|disculpa|una pregunta|pregunta)\s+/, "");
+  return (
+    /[?¿]/.test(text) ||
+    /^(que|cual|cuales|cuanto|cuanta|cuantos|como|cuando|donde|por que|porque|y las|y la|y el|y los|aceptan|tienen|manejan|cuesta|costo|precio|mensualidad|mensualidades|plan|velocidad|puedo|se puede|hay|las|la|el|los)\b.*\b(cuesta|costo|precio|cobran|sale|cuanto|que|cual|como|cuando)\b/.test(normalized) ||
+    /^(que|cual|cuales|cuanto|cuanta|cuantos|como|cuando|por que|porque|aceptan|tienen|manejan|cuesta|puedo|se puede)\b/.test(normalized) ||
+    /\b(cuanto (cuesta|es|sale|cobran|vale|seria)|que (costo|precio) tiene|cual es el (costo|precio)|que cuesta|cuanto me (sale|cobran))\b/.test(normalized)
+  );
 }
 
 // LOCALIDADES E INSTALACIÓN (antes se llamaban pero no existían)
@@ -879,7 +885,8 @@ async function handleSalesSession(phone, message) {
   }
 
   // Preguntas durante la contratación: responder y conservar el paso.
-  if (session.step !== "confirm" && looksLikeQuestion(answer)) {
+  const asksPriceOrMonthly = isPriceQuestion(answer) || isMonthlyPriceQuestion(answer) || /\bmensualidad(es)?\b/.test(normalizedAnswer);
+  if (session.step !== "confirm" && (looksLikeQuestion(answer) || asksPriceOrMonthly)) {
     const fixed = getSalesQuestionReply(session, answer);
     if (fixed) {
       await reply(phone, answer, fixed);
@@ -1400,7 +1407,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.1",
+    version: "V8.2",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1427,7 +1434,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.1 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.2 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
