@@ -150,8 +150,14 @@ function normalize(text) {
 }
 
 function isYes(text) {
-  const value = normalize(text);
-  return /^(si|ok|okay|claro|correcto|listo|continuar|adelante|va|de acuerdo|ya|ya lo hice|ya quedo|ya quedo listo|terminado|hecho)$/.test(value);
+  const value = normalize(text)
+    .replace(/[.!¡?¿,;:]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Acepta respuestas afirmativas naturales, incluso cuando el cliente
+  // agrega cortesía: "sí, por favor", "sí de favor", "claro que sí".
+  return /^(si|si por favor|si de favor|si gracias|si esta bien|si esta perfecto|claro|claro que si|por supuesto|ok|okay|ok gracias|correcto|listo|continuar|adelante|va|de acuerdo|ya|ya lo hice|ya quedo|ya quedo listo|terminado|hecho)$/.test(value);
 }
 
 function isNo(text) {
@@ -337,7 +343,7 @@ async function startConnectionGuide(phone) {
 
   await sendWhatsAppMessage(phone, `📡 *VAMOS A REVISAR TU CONEXIÓN*
 
-¡Vamos a revisar tu conexión! 😊 Primero veremos el adaptador PoE. Te indicaré qué revisar y cómo hacerlo. Comencemos.`);
+¡Claro! 😊 Vamos a revisar tu conexión. Empezaremos por el adaptador PoE y te iré indicando qué hacer en cada paso.`);
 
   await sendWhatsAppImage(phone, POE_IMAGE_URL, `🔌 *PASO 1. VERIFICAR LOS PUERTOS DEL ADAPTADOR PoE*
 
