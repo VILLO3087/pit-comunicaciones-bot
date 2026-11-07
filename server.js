@@ -1,3 +1,4 @@
+```javascript
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
@@ -346,20 +347,20 @@ async function handleConnectionGuide(phone, message) {
     return true;
   }
 
-  if (!isYes(message) && !isNo(message)) {
-    await sendWhatsAppMessage(
-      phone,
-      "Para continuar con la guía, responde *SI*. Si deseas detenerla, escribe *CANCELAR*."
-    );
-
-    return true;
-  }
-
   if (session.step === "poe") {
-    if (isNo(message)) {
+    if (isNo(answer)) {
       await sendWhatsAppMessage(
         phone,
-        "No hay problema. Cuando hayas identificado el adaptador PoE y sus dos cables, responde *SI* para continuar."
+        "No hay problema. Revisa con cuidado los cables del adaptador PoE. No desconectes nada. Cuando estés listo, responde SI. Si no identificas los puertos, solicita ayuda de un técnico."
+      );
+
+      return true;
+    }
+
+    if (!isYes(answer)) {
+      await sendWhatsAppMessage(
+        phone,
+        "Para continuar con la revisión, responde SI cuando hayas identificado los puertos POE y LAN. Si deseas detener la guía, escribe CANCELAR."
       );
 
       return true;
@@ -370,120 +371,44 @@ async function handleConnectionGuide(phone, message) {
 
     await sendWhatsAppMessage(
       phone,
-      `🔌 *PASO 2. CONEXIONES DEL ADAPTADOR PoE*
+      `✅ *PASO 1 COMPLETADO*
 
-Ahora revisaremos los dos cables de red del adaptador.
+Ahora revisaremos el cable que llega a tu router.
 
-⚫ *CABLE NEGRO:*
-Está conectado en el puerto que dice *POE*.
+Observa la siguiente imagen.`
+    );
 
-Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+    await sendWhatsAppImage(
+      phone,
+      ROUTER_IMAGE_URL,
+      `📶 *PASO 2. REVISAR EL ROUTER*
 
-⚪ *CABLE GRIS:*
-Está conectado en el puerto que dice *LAN*.
+Verifica que el cable de red que viene del adaptador PoE esté conectado en el puerto *WAN* de tu router.
 
-Desconéctalo y vuelve a conectarlo en ESE MISMO PUERTO.
+⚠️ No cambies los cables de lugar.
+⚠️ No presiones el botón RESET.
+⚠️ No desconectes el cable de la antena.
 
-🚨 *MUY IMPORTANTE*
-
-❌ No intercambies los cables.
-❌ El negro regresa a POE.
-❌ El gris regresa a LAN.
-❌ No cambies los cables de posición.
-
-Cuando termines, responde *SI* para revisar el router.`
+Cuando hayas revisado la conexión, responde *SI*.`
     );
 
     return true;
   }
 
   if (session.step === "router") {
-    if (isNo(message)) {
+    if (isNo(answer)) {
       await sendWhatsAppMessage(
         phone,
-        "Está bien. Termina de conectar correctamente los cables del adaptador PoE. Cuando estés listo, responde *SI*."
+        "Está bien. Revisa que el cable que viene del PoE llegue al puerto WAN del router. No cambies otros cables. Cuando termines, responde SI."
       );
 
       return true;
     }
 
-    session.step = "wait";
-    session.updatedAt = Date.now();
-
-    await sendWhatsAppMessage(
-      phone,
-      `📶 *PASO 3. ROUTER WiFi*
-
-Observa la fotografía e identifica el cable de red conectado en el puerto que dice *WAN*.
-
-Desconecta ese cable y vuelve a conectarlo en ESE MISMO PUERTO WAN.
-
-⚠️ No lo conectes en ningún otro puerto del router.
-
-❌ No presiones el botón RESET.
-
-Cuando termines, responde *SI* para continuar.`
-    );
-
-    await sendWhatsAppImage(
-      phone,
-      ROUTER_IMAGE_URL,
-      "📶 *Identifica el puerto WAN de tu router.* Desconecta y vuelve a conectar el cable en ese mismo puerto."
-    );
-
-    return true;
-  }
-
-  if (session.step === "wait") {
-    if (isNo(message)) {
+    if (!isYes(answer)) {
       await sendWhatsAppMessage(
         phone,
-        "No hay problema. Revisa que el cable del router esté conectado nuevamente en el mismo puerto WAN. Cuando termines, responde *SI*."
-      );
-
-      return true;
-    }
-
-    session.step = "confirmation";
-    session.updatedAt = Date.now();
-
-    await sendWhatsAppMessage(
-      phone,
-      `⏱️ *PASO 4. ESPERA Y COMPROBACIÓN*
-
-Verifica que las conexiones estén en su lugar:
-
-1️⃣ Cable negro conectado en *POE*.
-2️⃣ Cable gris conectado en *LAN*.
-3️⃣ Cable del router conectado en *WAN*.
-
-Espera de 3 a 5 minutos para que los equipos restablezcan la conexión.
-
-🚨 *RECUERDA*
-
-❌ No presiones RESET.
-❌ No intercambies los cables POE y LAN.
-❌ No conectes el cable WAN en otro puerto.
-❌ No manipules la antena ni el cableado exterior.
-
-Después de esperar, responde *SI* si ya tienes Internet o *NO* si todavía no tienes servicio.`
-    );
-
-    return true;
-  }
-
-  if (session.step === "confirmation") {
-    if (isYes(message)) {
-      guideSessions.delete(phone);
-
-      await sendWhatsAppMessage(
-        phone,
-        `✅ ¡Excelente! Nos alegra que tu servicio de Internet haya regresado.
-
-Gracias por seguir los pasos.
-
-💙 *PIT COMUNICACIONES*
-Conectando contigo.`
+        "Necesito que respondas SI cuando hayas revisado el puerto WAN del router, o NO si todavía necesitas revisarlo. Escribe CANCELAR para detener la guía."
       );
 
       return true;
@@ -493,20 +418,143 @@ Conectando contigo.`
 
     await sendWhatsAppMessage(
       phone,
-      `👨‍🔧 *NECESITAMOS AYUDARTE*
+      `✅ *REVISIÓN COMPLETADA*
 
-Si después de realizar los pasos sigues sin Internet, vamos a solicitar atención técnica.
+Ahora verifica si tus dispositivos ya tienen Internet.
 
-Por favor, envíanos:
+¿Ya puedes navegar?
 
-1️⃣ Nombre completo.
-2️⃣ Localidad.
-3️⃣ Número de teléfono de contacto.
-4️⃣ Confírmanos que sigues sin Internet.
+Responde:
+1️⃣ SI, ya tengo Internet.
+2️⃣ NO, sigo sin Internet.
 
-Un técnico deberá revisar tu reporte.
+Si el problema continúa, podemos solicitar la atención de un técnico.`
+    );
 
-💙 *PIT COMUNICACIONES*`
+    guideOffers.set(phone, {
+      step: "internet_result",
+      updatedAt: Date.now()
+    });
+
+    return true;
+  }
+
+  return false;
+}
+
+// OFRECER ATENCIÓN DE UN ASESOR
+async function offerHumanSupport(phone, reason) {
+  salesOffers.delete(phone);
+  guideOffers.delete(phone);
+  guideSessions.delete(phone);
+  salesSessions.delete(phone);
+
+  await sendWhatsAppMessage(
+    phone,
+    `👨‍🔧 *ATENCIÓN PERSONALIZADA*
+
+Con gusto podemos ayudarte.
+
+Voy a solicitar que un asesor o técnico de PIT COMUNICACIONES revise tu caso.
+
+Para canalizar correctamente tu solicitud, por favor indícanos:
+
+1️⃣ Tu nombre completo.
+2️⃣ Tu localidad o colonia.
+3️⃣ ¿Necesitas atención de un asesor o de un técnico?
+
+Motivo de la solicitud: ${reason}
+
+Un integrante de nuestro equipo dará seguimiento dentro de nuestro horario de atención.`
+  );
+}
+
+// RESPUESTA DE LA GUÍA Y SOLICITUD DE TÉCNICO
+async function handleGuideOffer(phone, message) {
+  const offer = guideOffers.get(phone);
+
+  if (!offer) return false;
+
+  const answer = normalize(message);
+
+  if (offer.step === "internet_result") {
+    if (
+      answer === "1" ||
+      answer.includes("si tengo internet") ||
+      answer.includes("ya tengo internet") ||
+      answer === "si"
+    ) {
+      guideOffers.delete(phone);
+
+      await sendWhatsAppMessage(
+        phone,
+        "¡Excelente! 😊 Nos da gusto que tu servicio haya quedado funcionando. Si necesitas algo más, escribe MENU."
+      );
+
+      return true;
+    }
+
+    if (
+      answer === "2" ||
+      answer === "no" ||
+      answer.includes("sigo sin internet") ||
+      answer.includes("no tengo internet")
+    ) {
+      offer.step = "request_technician";
+
+      await sendWhatsAppMessage(
+        phone,
+        `Lamentamos que el problema continúe.
+
+¿Deseas que solicitemos la atención de un técnico?
+
+Responde:
+1️⃣ Sí, quiero hablar con un técnico.
+2️⃣ No, por ahora no.`
+      );
+
+      return true;
+    }
+
+    await sendWhatsAppMessage(
+      phone,
+      "Por favor responde 1 si ya tienes Internet o 2 si todavía no tienes servicio."
+    );
+
+    return true;
+  }
+
+  if (offer.step === "request_technician") {
+    if (
+      answer === "1" ||
+      answer.includes("si") ||
+      answer.includes("tecnico") ||
+      answer.includes("técnico")
+    ) {
+      guideOffers.delete(phone);
+
+      await offerHumanSupport(
+        phone,
+        "El cliente realizó la guía de conexión y continúa sin Internet. Solicita atención de un técnico."
+      );
+
+      return true;
+    }
+
+    if (answer === "2" || answer === "no") {
+      guideOffers.delete(phone);
+
+      await sendWhatsAppMessage(
+        phone,
+        "Entendido. Cuando necesites ayuda, aquí estaremos. Escribe MENU para ver las opciones."
+      );
+
+      return true;
+    }
+
+    await sendWhatsAppMessage(
+      phone,
+      "Responde 1 para solicitar un técnico o 2 si no necesitas atención por ahora."
     );
 
     return true;
@@ -515,456 +563,306 @@ Un técnico deberá revisar tu reporte.
   return false;
 }
 
-// RESPUESTAS DEL MENÚ
-function getMenuReply(message) {
-  const option = normalize(message);
+// DETECCIÓN DE SOLICITUD DE ASESOR O TÉCNICO
+function isHumanSupportRequest(message) {
+  const text = normalize(message);
 
-  if (["hola", "buenas", "inicio", "menu"].includes(option)) {
-    return mainMenu();
-  }
-
-  switch (option) {
-    case "1":
-      return null;
-
-    case "2":
-      return `🐢 *INTERNET LENTO*
-
-Vamos a revisar tu conexión.
-
-1. Acércate al router.
-2. Comprueba que los cables estén conectados.
-3. Reinicia únicamente el router desconectando su alimentación eléctrica durante 30 segundos.
-4. Conéctalo nuevamente y espera de 3 a 5 minutos.
-
-No presiones el botón RESET.
-
-Si continúa lento, escribe *TECNICO*.`;
-
-    case "3":
-      return `💳 *INFORMACIÓN DE PAGOS*
-
-Puedes realizar tu pago mediante:
-
-💵 Efectivo.
-🏦 Transferencia bancaria.
-🏪 Depósito en OXXO.
-
-📅 *FECHAS DE PAGO*
-Del día 15 al 20 de cada mes.
-
-⚠️ A partir del día 21 se cobran $30 MXN adicionales por mora.
-
-🚫 El servicio podrá ser suspendido si no se realiza el pago.
-
-Si realizas un pago, envíanos tu nombre completo y una fotografía del comprobante.
-
-⏳ Tu pago quedará pendiente de revisión hasta verificarlo.`;
-
-    case "4":
-      return `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*
-
-📥 25 Mbps de bajada.
-📤 10 Mbps de subida.
-💰 $350 MXN mensuales.
-♾️ Sin límite de navegación.
-📱 Puedes conectar los dispositivos que necesites.
-
-La velocidad se comparte entre los dispositivos conectados.
-
-¿Te gustaría contratar? Escribe *5*.`;
-
-    case "5":
-      return `🏠 *¡QUEREMOS LLEVAR INTERNET HASTA TU HOGAR!*
-
-Primero, ¿en qué localidad vives?`;
-
-    case "6":
-      return `📍 *COBERTURA Y HORARIOS*
-
-🕒 HORARIOS DE ATENCIÓN TÉCNICA
-
-Lunes a viernes: 07:00 a 18:00.
-Sábados: 07:00 a 14:00.
-Domingos: Sin servicio técnico.
-
-🛠️ *COSTOS DE INSTALACIÓN*
-
-📍 La Libertad, Chiapas: $600.
-📍 Emiliano Zapata, Tabasco: $800.
-📍 Ejido Morelos: $1,200.
-
-En otras comunidades debemos verificar cobertura y costo.`;
-
-    case "7":
-    case "tecnico":
-      return `👨‍🔧 *ATENCIÓN TÉCNICA*
-
-Con gusto te ayudaremos.
-
-Para solicitar atención, envíanos:
-
-👤 Nombre completo.
-📍 Localidad.
-📱 Número de teléfono.
-📝 Describe brevemente tu problema.
-
-Un técnico deberá revisar tu solicitud.`;
-
-    default:
-      return null;
-  }
+  return (
+    /hablar con (un )?(asesor|tecnico|tecnica)/.test(text) ||
+    /quiero (un )?(asesor|tecnico|tecnica)/.test(text) ||
+    /necesito (un )?(asesor|tecnico|tecnica)/.test(text) ||
+    /atencion (de un )?(asesor|tecnico)/.test(text) ||
+    /que me atienda/.test(text) ||
+    /contactar (a )?(un )?(asesor|tecnico)/.test(text) ||
+    /persona real/.test(text) ||
+    /agente humano/.test(text)
+  );
 }
 
-// CONTRATACIONES
-function startSales(phone) {
-  guideOffers.delete(phone);
-  guideSessions.delete(phone);
+// VENTAS: DETECCIÓN DE INTENCIÓN
+function isSalesIntent(message) {
+  const text = normalize(message);
+
+  return (
+    /contratar/.test(text) ||
+    /quiero internet/.test(text) ||
+    /poner internet/.test(text) ||
+    /instalar internet/.test(text) ||
+    /me interesa el plan/.test(text) ||
+    /quiero el servicio/.test(text) ||
+    /darme de alta/.test(text) ||
+    /informacion para contratar/.test(text) ||
+    /informes para contratar/.test(text)
+  );
+}
+
+// VENTAS: INICIAR SOLICITUD
+async function startSalesSession(phone) {
   salesOffers.delete(phone);
+
   salesSessions.set(phone, {
-    step: "locality",
-    locality: "",
+    step: "name",
     name: "",
+    locality: "",
     address: "",
+    reference: "",
     updatedAt: Date.now()
   });
+
+  await sendWhatsAppMessage(
+    phone,
+    `🏠 *¡QUÉ BUENO QUE TE INTERESA CONTRATAR!*
+
+Con gusto te ayudamos a solicitar tu instalación.
+
+Para comenzar, ¿me puedes proporcionar tu *nombre completo*?`
+  );
 }
 
-function getInstallationFee(locality) {
-  const normalized = normalize(locality);
+// VENTAS: VALIDAR DATOS
+function isValidName(message) {
+  const text = String(message || "").trim();
 
-  if (normalized.includes("la libertad")) return 600;
-  if (normalized.includes("emiliano zapata")) return 800;
-  if (normalized.includes("morelos")) return 1200;
-
-  return null;
+  return (
+    text.length >= 5 &&
+    text.length <= 100 &&
+    /[a-zA-ZáéíóúÁÉÍÓÚñÑ]/.test(text) &&
+    !/^(si|no|ok|menu|menú|hola|buenas|precio|cuanto|cuánto)$/i.test(text)
+  );
 }
 
-// DETECTAR LOCALIDADES MENCIONADAS
-function getMentionedLocalities(text) {
-  const normalized = normalize(text);
-  const found = [];
+function isValidLocality(message) {
+  const text = String(message || "").trim();
 
-  if (normalized.includes("la libertad")) {
-    found.push("La Libertad, Chiapas");
-  }
-
-  if (normalized.includes("emiliano zapata")) {
-    found.push("Emiliano Zapata, Tabasco");
-  }
-
-  if (
-    normalized.includes("ejido morelos") ||
-    normalized.includes("morelos")
-  ) {
-    found.push("Ejido Morelos");
-  }
-
-  return [...new Set(found)];
+  return text.length >= 3 && text.length <= 120;
 }
 
-// PROCESAR ACEPTACIÓN DE CONTRATACIÓN
-function handleSalesOfferAcceptance(phone, message) {
-  const offer = salesOffers.get(phone);
+function isValidAddress(message) {
+  const text = String(message || "").trim();
 
-  if (!offer) return null;
+  return text.length >= 5 && text.length <= 200;
+}
 
-  const normalized = normalize(message);
+// VENTAS: CAPTURAR INFORMACIÓN
+async function handleSalesSession(phone, message) {
+  const session = salesSessions.get(phone);
 
-  const isAcceptance =
-    isYes(message) ||
-    /\b(600|800|1200)\b/.test(normalized) ||
-    /contrat|instalacion|instalar|en la libertad|emiliano zapata|morelos/.test(
-      normalized
+  if (!session) return false;
+
+  const answer = String(message || "").trim();
+  const normalizedAnswer = normalize(answer);
+
+  if (normalizedAnswer === "cancelar") {
+    salesSessions.delete(phone);
+
+    await sendWhatsAppMessage(
+      phone,
+      "De acuerdo. Hemos cancelado tu solicitud de contratación. Cuando quieras continuar, escribe MENU."
     );
-    persistManualPauses();
-    return false;
+
+    return true;
+  }
+
+  if (isHumanSupportRequest(answer)) {
+    salesSessions.delete(phone);
+
+    await offerHumanSupport(
+      phone,
+      "El cliente está realizando una solicitud de contratación y solicita atención personalizada."
+    );
+
+    return true;
+  }
+
+  session.updatedAt = Date.now();
+
+  if (session.step === "name") {
+    if (!isValidName(answer)) {
+      await sendWhatsAppMessage(
+        phone,
+        "Por favor, escribe tu nombre y apellidos para registrar correctamente tu solicitud."
+      );
+
+      return true;
+    }
+
+    session.name = answer;
+    session.step = "locality";
+
+    await sendWhatsAppMessage(
+      phone,
+      `Gracias, ${session.name}. 😊
+
+Ahora dime, ¿en qué localidad o colonia deseas contratar el servicio?`
+    );
+
+    return true;
+  }
+
+  if (session.step === "locality") {
+    if (!isValidLocality(answer)) {
+      await sendWhatsAppMessage(
+        phone,
+        "Por favor, indícame el nombre de tu localidad, colonia o ejido."
+      );
+
+      return true;
+    }
+
+    session.locality = answer;
+    session.step = "address";
+
+    await sendWhatsAppMessage(
+      phone,
+      "Muy bien. Ahora indícame tu dirección o una ubicación cercana para identificar dónde sería la instalación."
+    );
+
+    return true;
+  }
+
+  if (session.step === "address") {
+    if (!isValidAddress(answer)) {
+      await sendWhatsAppMessage(
+        phone,
+        "Por favor, escribe una dirección, calle, colonia o referencia que nos ayude a localizar tu domicilio."
+      );
+
+      return true;
+    }
+
+    session.address = answer;
+    session.step = "reference";
+
+    await sendWhatsAppMessage(
+      phone,
+      "¿Hay alguna referencia para encontrar tu domicilio? Por ejemplo: cerca de una escuela, tienda, iglesia o parque. Si no tienes referencia, escribe NINGUNA."
+    );
+
+    return true;
+  }
+
+  if (session.step === "reference") {
+    session.reference =
+      normalizedAnswer === "ninguna" ? "Sin referencia adicional" : answer;
+
+    session.step = "confirm";
+
+    await sendWhatsAppMessage(
+      phone,
+      `📋 *RESUMEN DE TU SOLICITUD*
+
+👤 Nombre: ${session.name}
+📍 Localidad: ${session.locality}
+🏠 Dirección: ${session.address}
+📌 Referencia: ${session.reference}
+
+¿Los datos son correctos?
+
+Responde:
+1️⃣ Sí, son correctos.
+2️⃣ No, quiero corregirlos.`
+    );
+
+    return true;
+  }
+
+  if (session.step === "confirm") {
+    if (answer === "1" || isYes(answer)) {
+      const summary = {
+        name: session.name,
+        locality: session.locality,
+        address: session.address,
+        reference: session.reference
+      };
+
+      salesSessions.delete(phone);
+      salesOffers.set(phone, {
+        step: "confirmed",
+        data: summary,
+        updatedAt: Date.now()
+      });
+
+      await sendWhatsAppMessage(
+        phone,
+        `✅ *SOLICITUD REGISTRADA*
+
+Gracias, ${summary.name}.
+
+Hemos recibido tus datos para solicitar el servicio de Internet.
+
+Un asesor de PIT COMUNICACIONES deberá revisar la cobertura y comunicarse contigo para continuar el proceso.
+
+⚠️ Esta solicitud no significa que la instalación ya esté confirmada.
+
+Si necesitas hablar con un asesor, escribe *ASESOR*.`
+      );
+
+      return true;
+    }
+
+    if (answer === "2" || isNo(answer)) {
+      session.step = "name";
+
+      await sendWhatsAppMessage(
+        phone,
+        "Vamos a corregir tus datos. Por favor, escribe nuevamente tu nombre completo."
+      );
+
+      return true;
+    }
+
+    await sendWhatsAppMessage(
+      phone,
+      "Responde 1 si los datos son correctos o 2 si deseas corregirlos."
+    );
+
+    return true;
   }
 
   return true;
 }
 
-// WEBHOOK DE VERIFICACIÓN
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
+// VENTAS: CONFIRMAR O SOLICITAR ASESOR
+async function handleSalesOfferAcceptance(phone, message) {
+  const offer = salesOffers.get(phone);
 
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("WEBHOOK VERIFICADO");
-    return res.status(200).send(challenge);
+  if (!offer) return false;
+
+  const answer = normalize(message);
+
+  if (isHumanSupportRequest(message) || answer === "asesor") {
+    salesOffers.delete(phone);
+
+    await offerHumanSupport(
+      phone,
+      "El cliente terminó su solicitud de contratación y desea hablar con un asesor."
+    );
+
+    return true;
   }
 
-  return res.sendStatus(403);
-});
+  if (offer.step === "confirmed") {
+    if (
+      answer === "menu" ||
+      answer === "inicio" ||
+      answer === "principal"
+    ) {
+      salesOffers.delete(phone);
 
-// RECEPCIÓN DE MENSAJES
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
-
-  try {
-    const body = req.body;
-
-    if (!body.object) return;
-
-    const entries = body.entry || [];
-
-    for (const entry of entries) {
-      const changes = entry.changes || [];
-
-      for (const change of changes) {
-        const value = change.value || {};
-
-        // MENSAJES ENVIADOS MANUALMENTE DESDE WHATSAPP BUSINESS
-        const echoes = value.messages || [];
-
-        for (const echo of echoes) {
-          if (echo.from && echo.id) {
-            const echoKey = `${echo.from}:${echo.id}`;
-
-            if (!processedEchoes.has(echoKey)) {
-              processedEchoes.set(echoKey, Date.now());
-              pauseCustomer(echo.from);
-            }
-          }
-        }
-
-        // MENSAJES RECIBIDOS DE CLIENTES
-        const messages = value.messages || [];
-
-        for (const message of messages) {
-          const phone = message.from;
-
-          if (!phone || !message.id) continue;
-
-          if (isCustomerPaused(phone)) {
-            console.log(`BOT PAUSADO PARA ${phone}`);
-            continue;
-          }
-
-          if (message.type !== "text") {
-            await sendWhatsAppMessage(
-              phone,
-              "Por favor, envíanos tu consulta en un mensaje de texto para poder ayudarte."
-            );
-            continue;
-          }
-
-          const text = message.text?.body?.trim() || "";
-
-          if (!text) continue;
-
-          console.log(`MENSAJE DE ${phone}: ${text}`);
-
-          // CANCELACIÓN GENERAL
-          if (normalize(text) === "cancelar") {
-            guideSessions.delete(phone);
-            guideOffers.delete(phone);
-            salesSessions.delete(phone);
-            salesOffers.delete(phone);
-
-            await sendWhatsAppMessage(
-              phone,
-              "De acuerdo, hemos cancelado el proceso actual. Escribe MENU para comenzar nuevamente."
-            );
-
-            continue;
-          }
-
-          // MENÚ PRINCIPAL
-          if (["menu", "menú", "inicio", "hola", "buenas"].includes(normalize(text))) {
-            guideSessions.delete(phone);
-            guideOffers.delete(phone);
-            salesSessions.delete(phone);
-            salesOffers.delete(phone);
-
-            await sendWhatsAppMessage(phone, mainMenu());
-            continue;
-          }
-
-          // GUÍA DE CONEXIÓN ACTIVA
-          if (guideSessions.has(phone)) {
-            const handled = await handleConnectionGuide(phone, text);
-
-            if (handled) continue;
-          }
-
-          // ACEPTACIÓN DE GUÍA OFRECIDA
-          if (guideOffers.has(phone)) {
-            if (isYes(text)) {
-              guideOffers.delete(phone);
-              await startConnectionGuide(phone);
-              continue;
-            }
-
-            if (isNo(text)) {
-              guideOffers.delete(phone);
-
-              await sendWhatsAppMessage(
-                phone,
-                "De acuerdo. Si necesitas revisar tu conexión más adelante, escribe *TECNICO*."
-              );
-
-              continue;
-            }
-          }
-
-          // SOLICITUD DIRECTA DE GUÍA TÉCNICA
-          if (
-            /^(tecnico|técnico|guia|guía|revisar cables|ayuda tecnica|ayuda técnica)$/.test(
-              normalize(text)
-            )
-          ) {
-            await startConnectionGuide(phone);
-            continue;
-          }
-
-          // PROCESO DE CONTRATACIÓN ACTIVO
-          if (salesSessions.has(phone)) {
-            const salesReply = handleSales(phone, text);
-
-            if (salesReply) {
-              await sendWhatsAppMessage(phone, salesReply);
-              continue;
-            }
-          }
-
-          // ACEPTACIÓN DE OFERTA DE VENTAS
-          if (salesOffers.has(phone)) {
-            const acceptance = handleSalesOfferAcceptance(phone, text);
-
-            if (acceptance) {
-              await sendWhatsAppMessage(phone, acceptance);
-              continue;
-            }
-          }
-
-          // INICIO DE CONTRATACIÓN
-          if (
-            /^(5|contratar|quiero contratar|contratar internet|quiero internet)$/.test(
-              normalize(text)
-            )
-          ) {
-            startSales(phone);
-
-            await sendWhatsAppMessage(
-              phone,
-              "¡Excelente! Para comenzar, ¿en qué localidad deseas contratar el servicio?"
-            );
-
-            continue;
-          }
-
-          // OPCIONES DEL MENÚ
-          const menuReply = getMenuReply(text);
-
-          if (menuReply) {
-            await sendWhatsAppMessage(phone, menuReply);
-            continue;
-          }
-
-          // SIN INTERNET: OFRECER GUÍA
-          if (
-            /sin internet|no tengo internet|no hay internet|no tengo servicio|se fue el internet|se cayó el internet|se cayo el internet/.test(
-              normalize(text)
-            )
-          ) {
-            guideOffers.set(phone, {
-              createdAt: Date.now()
-            });
-
-            await sendWhatsAppMessage(
-              phone,
-              `📡 *VAMOS A AYUDARTE*
-
-Primero podemos realizar una revisión básica de las conexiones de tu equipo.
-
-¿Deseas que te comparta una guía paso a paso con fotografías para revisar el adaptador PoE y el router?
-
-Responde *SI* para comenzar o *NO* si prefieres solicitar atención de un técnico.`
-            );
-
-            continue;
-          }
-
-          // SOLICITUD DE ASESOR O TÉCNICO
-          if (
-            /asesor|hablar con alguien|persona real|agente|tecnico|técnico|soporte humano|atencion humana|atención humana/.test(
-              normalize(text)
-            )
-          ) {
-            const area = /asesor|ventas/.test(normalize(text))
-              ? "ventas"
-              : "soporte técnico";
-
-            await sendWhatsAppMessage(
-              phone,
-              `🙋 *SOLICITUD DE ATENCIÓN HUMANA*
-
-Entendido. Deseas comunicarte con el área de *${area}* de PIT COMUNICACIONES.
-
-Para que podamos canalizar tu solicitud, por favor comparte:
-
-1️⃣ Tu nombre completo.
-2️⃣ Tu localidad.
-3️⃣ Una breve descripción de lo que necesitas.
-
-Tu solicitud queda pendiente de atención por nuestro equipo.`
-            );
-
-            continue;
-          }
-
-          // RESPUESTA DE INTELIGENCIA ARTIFICIAL
-          const aiReply = await getAIReply(phone, text);
-
-          await sendWhatsAppMessage(phone, aiReply);
-        }
-      }
+      await sendWhatsAppMessage(phone, mainMenu());
+      return true;
     }
 
-    // LIMPIEZA DE ECHOES ANTIGUOS
-    const now = Date.now();
+    await sendWhatsAppMessage(
+      phone,
+      "Tu solicitud ya fue recibida. Si deseas hablar con un asesor, escribe ASESOR. Para ver el menú, escribe MENU."
+    );
 
-    for (const [key, timestamp] of processedEchoes.entries()) {
-      if (now - timestamp > 60 * 60 * 1000) {
-        processedEchoes.delete(key);
-      }
-    }
-  } catch (error) {
-    console.error("ERROR PROCESANDO WEBHOOK:", error);
+    return true;
   }
-});
 
-// ESTADO DEL SERVIDOR
-app.get("/", (req, res) => {
-  res.status(200).send("PIT COMUNICACIONES BOT ACTIVO");
-});
-
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "PIT COMUNICACIONES BOT",
-    timestamp: new Date().toISOString()
-  });
-});
-
-// INICIO DEL SERVIDOR
-async function startServer() {
-  try {
-    await loadManualPauses();
-
-    app.listen(PORT, () => {
-      console.log(`PIT COMUNICACIONES BOT escuchando en puerto ${PORT}`);
-      console.log(`Modelo OpenAI: ${OPENAI_MODEL}`);
-    });
-  } catch (error) {
-    console.error("ERROR INICIANDO SERVIDOR:", error);
-    process.exit(1);
-  }
+  return false;
 }
-
-startServer();
   if (!isAcceptance) return null;
 
   const mentioned = getMentionedLocalities(message);
