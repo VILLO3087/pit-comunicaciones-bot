@@ -1,5 +1,6 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8 (revisión completa)
+// Versión V8.1 (revisión completa)
+// V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -246,6 +247,13 @@ function isPaymentQuestion(text) {
   return /\b(pago|pagos|pagar|pague|pagarle|mensualidad|mensualidades|mora|recargo|recargos|adeudo|atraso|atrasado|vencimiento|vence|cuenta para depositar|numero de cuenta|transferencia|deposito|oxxo|comprobante|corte por falta de pago|suspension por falta de pago|me suspendieron)\b/.test(v);
 }
 
+// "¿Y las mensualidades?", "¿Cuánto es la mensualidad?": pregunta de PRECIO, no de fechas.
+function isMonthlyPriceQuestion(text) {
+  const v = clean(text);
+  if (!/\b(mensualidad|mensualidades|mensual|al mes|por mes|cada mes|renta mensual)\b/.test(v)) return false;
+  return !/\b(fecha|fechas|dia|dias|cuando|donde|pagar|pago|pagos|pague|mora|recargo|recargos|atraso|vence|vencimiento|oxxo|transferencia|deposito|comprobante|debo|adeudo)\b/.test(v);
+}
+
 function isPriceQuestion(text) {
   const v = clean(text);
   return /\b(cuanto (cuesta|es|sale|cobran|vale)|precio|precios|costo|costos|planes|plan familiar|velocidad|cuantos megas|cuantos mbps|megas)\b/.test(v);
@@ -338,6 +346,31 @@ function fixGreetings(text) {
   });
 }
 
+// SALUDAR UNA SOLA VEZ: después del primer saludo, la IA ya no repite "buenas noches".
+const lastGreetings = new Map();
+const GREETING_WINDOW = 6 * 60 * 60 * 1000;
+
+function markGreeted(phone) {
+  lastGreetings.set(phone, Date.now());
+}
+
+function wasGreetedRecently(phone) {
+  const at = lastGreetings.get(phone);
+  return Boolean(at && Date.now() - at < GREETING_WINDOW);
+}
+
+function startsWithGreeting(text) {
+  return /^\s*[¡!]?\s*(hola|buen(os|as)?\s+(d[ií]as?|tardes|noches))\b/i.test(String(text || ""));
+}
+
+// Quita "Buenas noches," / "¡Hola, buenas noches!" del inicio de la respuesta.
+function stripLeadingGreeting(text) {
+  const stripped = String(text || "")
+    .replace(/^\s*[¡!]?\s*(hola\s*[,!.]?\s*)?(buen(os|as)?\s+(d[ií]as?|tardes|noches)\s*)?[,.!]*\s*/i, "")
+    .trim();
+  return stripped ? capitalize(stripped) : String(text || "").trim();
+}
+
 function farewellMessage() {
   return `¡Con gusto! 😊 Gracias por comunicarte con *PIT COMUNICACIONES*. Si necesitas algo más, escribe *MENU*. ¡Que tengas ${getTimeGreeting()}!`;
 }
@@ -405,6 +438,8 @@ Conectando contigo.`;
 const SLOW_REPLY = `🐢 *INTERNET LENTO – PIT COMUNICACIONES*\n\nVamos a revisar tu conexión.\n\n1️⃣ Reinicia tu módem o router desconectándolo durante 30 segundos.\n2️⃣ Conéctalo nuevamente y espera a que encienda por completo.\n3️⃣ Comprueba si mejora la conexión.\n\nSi el problema continúa, escribe *ASESOR* para solicitar ayuda de un técnico.`;
 
 const PAYMENT_REPLY = `💳 *INFORMACIÓN DE PAGOS – PIT COMUNICACIONES*\n\n📅 Puedes realizar tu pago del día *15 al 20 de cada mes*.\n⚠️ A partir del día 21 se aplica un cargo adicional de *$30 MXN* por mora.\n🚫 El servicio puede ser suspendido por falta de pago.\n\nAceptamos efectivo, transferencia bancaria y depósito en OXXO.\n\nAl realizar tu pago, envía tu comprobante y nombre completo para verificarlo. No se confirma ningún pago hasta que sea revisado.\n\nSi necesitas apoyo, escribe *ASESOR*.`;
+
+const MONTHLY_REPLY = `💰 *MENSUALIDAD – PIT COMUNICACIONES*\n\nLa mensualidad del *Plan Familiar* es de *$350 MXN*.\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n♾️ Navegación sin límite.\n\nLa mensualidad es la misma en todas las localidades; lo que cambia es el costo de instalación. Se paga del día 15 al 20 de cada mes.\n\n¿Te interesa contratar? Escribe *CONTRATAR*.`;
 
 const PLAN_REPLY = `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n💰 *$350 MXN al mes.*\n♾️ Navegación sin límite.\n\n¿Te interesa contratar? Escribe *CONTRATAR*. Para hablar con ventas, escribe *ASESOR*.`;
 
@@ -817,7 +852,7 @@ function getSalesQuestionReply(session, message) {
     return `${feeText}\n\n${salesPendingPrompt(session)}`;
   }
 
-  if (isPriceQuestion(normalized)) {
+  if (isPriceQuestion(normalized) || isMonthlyPriceQuestion(normalized)) {
     return `📡 *PLAN FAMILIAR PIT COMUNICACIONES*\n\n📥 25 Mbps de bajada.\n📤 10 Mbps de subida.\n💰 *$350 MXN mensuales.*\n♾️ Sin límite de navegación.\n\n${salesPendingPrompt(session)}`;
   }
 
@@ -976,11 +1011,15 @@ async function getAIReply(phone, message, options = {}) {
 
   const session = getConversation(phone);
   const greeting = getTimeGreeting();
+  const alreadyGreeted = wasGreetedRecently(phone);
+  const greetingRule = alreadyGreeted
+    ? `NO SALUDES: el cliente ya fue saludado en esta conversación. No empieces con "Hola", "Buenas noches" ni otro saludo; responde directo. Solo si el cliente se despide puedes desearle "${greeting}".`
+    : `Puedes saludar solo al inicio con "${greeting}". Nunca uses "buen día" ni otro saludo diferente.`;
 
   const instructions = `Eres el asesor virtual de PIT COMUNICACIONES, proveedor de Internet inalámbrico en La Libertad (Chiapas), Emiliano Zapata (Tabasco), Ejido Morelos y comunidades cercanas.
 
 FECHA Y HORA ACTUAL EN CIUDAD DE MÉXICO: ${getMexicoDateText()}.
-SALUDO CORRECTO EN ESTE MOMENTO: "${greeting}". Si saludas o te despides, usa solo "${greeting}". Nunca uses "buen día" ni otro saludo diferente.
+SALUDO CORRECTO EN ESTE MOMENTO: "${greeting}". ${greetingRule}
 
 INFORMACIÓN OFICIAL:
 ${JSON.stringify(businessInfo)}
@@ -1034,7 +1073,12 @@ REGLAS:
 
     if (!answer) return "No pude preparar una respuesta. Escribe *MENU* para ver las opciones.";
 
-    const fixedAnswer = fixGreetings(answer).slice(0, 3500);
+    let fixedAnswer = fixGreetings(answer).slice(0, 3500);
+    if (alreadyGreeted) {
+      fixedAnswer = stripLeadingGreeting(fixedAnswer);
+    } else if (startsWithGreeting(fixedAnswer)) {
+      markGreeted(phone);
+    }
     saveConversation(phone, "user", message);
     saveConversation(phone, "assistant", fixedAnswer);
     return fixedAnswer;
@@ -1096,6 +1140,10 @@ function cleanupSessions() {
   }
   if (pausesChanged) persistManualPauses();
 
+  for (const [phone, at] of lastGreetings.entries()) {
+    if (now - at > GREETING_WINDOW) lastGreetings.delete(phone);
+  }
+
   for (const map of [processedEchoes, processedMessages]) {
     for (const [id, timestamp] of map.entries()) {
       if (now - timestamp > 60 * 60 * 1000) map.delete(id);
@@ -1129,6 +1177,7 @@ async function processMessage(from, text) {
   if (["menu", "inicio", "menu principal"].includes(normalized)) {
     clearFlows(from);
     conversations.delete(from);
+    markGreeted(from);
     await sendWhatsAppMessage(from, mainMenu());
     return;
   }
@@ -1210,7 +1259,14 @@ async function processMessage(from, text) {
   const fixedReply = getMenuReply(text);
   if (fixedReply) {
     if (fixedReply === PAYMENT_REPLY) startPaymentFollowup(from);
+    if (fixedReply.includes("MENÚ DE ATENCIÓN")) markGreeted(from);
     await reply(from, text, fixedReply);
+    return;
+  }
+
+  // 10.5 Precio de la mensualidad (antes se confundía con fechas de pago).
+  if (isMonthlyPriceQuestion(text)) {
+    await reply(from, text, MONTHLY_REPLY);
     return;
   }
 
@@ -1344,7 +1400,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8",
+    version: "V8.1",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1371,7 +1427,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.1 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
