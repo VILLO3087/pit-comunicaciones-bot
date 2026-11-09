@@ -1,8 +1,9 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.3 (revisión completa)
+// Versión V8.4 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
+// V8.4: flujo de comprobante de pago: foto → nombre del titular → registro y aviso.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -54,6 +55,8 @@ const guideSessions = new Map();
 const guideOffers = new Map();
 const paymentFollowups = new Map();
 const supportSessions = new Map();
+const receiptSessions = new Map();
+const RECEIPT_WINDOW = 3 * 60 * 60 * 1000;
 const processedMessages = new Map();
 const phoneQueues = new Map();
 
@@ -425,6 +428,7 @@ function saveConversation(phone, role, content) {
 }
 
 function clearFlows(phone) {
+  receiptSessions.delete(phone);
   guideSessions.delete(phone);
   guideOffers.delete(phone);
   salesSessions.delete(phone);
@@ -1175,7 +1179,7 @@ function cleanupSessions() {
     }
   }
 
-  for (const map of [guideSessions, guideOffers, paymentFollowups, supportSessions, salesSessions, salesOffers]) {
+  for (const map of [guideSessions, guideOffers, paymentFollowups, supportSessions, salesSessions, salesOffers, receiptSessions]) {
     for (const [phone, session] of map.entries()) {
       if (now - session.updatedAt > SESSION_TTL) map.delete(phone);
     }
@@ -1185,6 +1189,127 @@ function cleanupSessions() {
 // SEGUIMIENTO DESPUÉS DE INFORMACIÓN DE PAGOS
 function startPaymentFollowup(phone) {
   paymentFollowups.set(phone, { updatedAt: Date.now() });
+}
+
+// =====================================================================
+// COMPROBANTES DE PAGO (foto o PDF)
+// =====================================================================
+function isValidHolderName(text) {
+  return isValidName(text) && clean(text).split(" ").length >= 2 && !isOutageReport(text) && !isPaymentQuestion(text);
+}
+
+async function forwardReceiptToTeam(mediaList) {
+  if (!NOTIFY_PHONE) return;
+  for (const media of mediaList) {
+    if (!media.id) continue;
+    const payload = media.type === "document"
+      ? { to: NOTIFY_PHONE, type: "document", document: { id: media.id, filename: media.filename || "comprobante.pdf" } }
+      : { to: NOTIFY_PHONE, type: "image", image: { id: media.id } };
+    const ok = await callWhatsApp(payload);
+    if (!ok) console.error("No se pudo reenviar el comprobante a NOTIFY_PHONE.");
+  }
+}
+
+async function registerReceipt(phone, session, name) {
+  session.step = "done";
+  session.name = String(name).trim();
+  session.updatedAt = Date.now();
+
+  await notifyTeam(`🔔 COMPROBANTE DE PAGO PIT COMUNICACIONES\nTitular: ${session.name}\nTeléfono: ${phone}\nArchivos recibidos: ${session.media.length}\nEstado: Pendiente de verificación.`);
+  await forwardReceiptToTeam(session.media);
+
+  await sendWhatsAppMessage(phone, `✅ *COMPROBANTE REGISTRADO*\n\nGracias, ${session.name}. Recibimos tu comprobante y lo pasamos a revisión.\n\nUn asesor verificará el pago y te confirmará por este medio.\n⚠️ El pago no queda confirmado hasta que sea revisado.\n\nSi necesitas algo más, escribe *MENU*.`);
+}
+
+// Llega una foto o PDF.
+async function handleIncomingMedia(phone, media) {
+  if (isCustomerPaused(phone)) return;
+
+  const busy = [guideSessions, salesSessions, supportSessions].some(map => map.has(phone));
+  const isReceiptFile = media.type === "image" || media.type === "document";
+
+  if (busy || !isReceiptFile) {
+    await sendWhatsAppMessage(phone, busy
+      ? "Recibí tu archivo. 😊 Por ahora solo puedo leer mensajes de texto; por favor responde con texto para continuar."
+      : "Recibí tu mensaje. 😊 Por ahora solo puedo leer mensajes de texto. Escríbeme qué necesitas o escribe *MENU* para ver las opciones.");
+    return;
+  }
+
+  const existing = receiptSessions.get(phone);
+
+  // Otro comprobante después de haber registrado uno.
+  if (existing && existing.step === "done" && Date.now() - existing.updatedAt < RECEIPT_WINDOW) {
+    existing.media.push(media);
+    existing.updatedAt = Date.now();
+    await notifyTeam(`🔔 OTRO COMPROBANTE PIT COMUNICACIONES\nTitular: ${existing.name}\nTeléfono: ${phone}\nArchivos recibidos: ${existing.media.length}`);
+    await forwardReceiptToTeam([media]);
+    await sendWhatsAppMessage(phone, `📄 Recibimos otro archivo y lo agregamos a tu reporte de pago, ${existing.name}. Un asesor lo verificará y te confirmará por este medio.`);
+    return;
+  }
+
+  // Ya estábamos esperando el nombre: se suma el archivo.
+  if (existing && existing.step === "name") {
+    existing.media.push(media);
+    existing.updatedAt = Date.now();
+    if (media.caption && isValidHolderName(media.caption)) {
+      await registerReceipt(phone, existing, media.caption);
+      return;
+    }
+    await sendWhatsAppMessage(phone, "📄 Recibimos también este archivo. Para registrar tu pago, escribe el *nombre completo del titular del servicio*.");
+    return;
+  }
+
+  // Comprobante nuevo.
+  clearFlows(phone);
+  const session = { step: "name", name: "", media: [media], attempts: 0, updatedAt: Date.now() };
+  receiptSessions.set(phone, session);
+
+  if (media.caption && isValidHolderName(media.caption)) {
+    await registerReceipt(phone, session, media.caption);
+    return;
+  }
+
+  await sendWhatsAppMessage(phone, `📄 *COMPROBANTE RECIBIDO*\n\nGracias por enviar tu comprobante.\n\nPara registrarlo, escribe el *nombre completo del titular del servicio* (la persona a cuyo nombre está el Internet).\n\nSi no es un comprobante de pago, escribe *CANCELAR*.`);
+}
+
+// Texto recibido mientras se espera el nombre del titular.
+async function handleReceiptSession(phone, text) {
+  const session = receiptSessions.get(phone);
+  if (!session || session.step !== "name") return false;
+  session.updatedAt = Date.now();
+
+  if (isValidHolderName(text)) {
+    await registerReceipt(phone, session, text);
+    return true;
+  }
+
+  if (isStrongClosing(text) || isNo(text)) {
+    receiptSessions.delete(phone);
+    await sendWhatsAppMessage(phone, `De acuerdo, no registramos el comprobante. ${farewellMessage()}`);
+    return true;
+  }
+
+  // Otro tema (pregunta, falla, asesor): se atiende normalmente.
+  if (looksLikeQuestion(text) || isOutageReport(text) || isHumanSupportRequest(text) || isSalesIntent(text) || /^\d$/.test(clean(text))) {
+    receiptSessions.delete(phone);
+    return false;
+  }
+
+  session.attempts += 1;
+  if (session.attempts > 2) {
+    receiptSessions.delete(phone);
+    return false;
+  }
+
+  await sendWhatsAppMessage(phone, "Para registrar tu comprobante, escribe el *nombre y apellidos del titular del servicio*. Si no es un comprobante de pago, escribe *CANCELAR*.");
+  return true;
+}
+
+// Cliente que ya envió comprobante y pregunta por su pago.
+function isReceiptStatusQuestion(phone, text) {
+  const session = receiptSessions.get(phone);
+  if (!session || session.step !== "done" || Date.now() - session.updatedAt > 24 * 60 * 60 * 1000) return false;
+  return /\b(pago|pague|comprobante|confirm|confirman|confirmado|ya quedo|reviso|revisaron|recibieron|recibio|llego|deposito|transferencia)\b/.test(clean(text));
 }
 
 // =====================================================================
@@ -1208,7 +1333,7 @@ async function processMessage(from, text) {
   }
 
   if (["cancelar", "cancela", "salir"].includes(normalized)) {
-    const hadFlow = [guideSessions, guideOffers, salesSessions, supportSessions, salesOffers].some(map => map.has(from));
+    const hadFlow = [guideSessions, guideOffers, salesSessions, supportSessions, salesOffers, receiptSessions].some(map => map.has(from));
     clearFlows(from);
     await sendWhatsAppMessage(from, hadFlow
       ? "De acuerdo, hemos detenido el proceso. Si necesitas ayuda, escribe *MENU*."
@@ -1219,6 +1344,11 @@ async function processMessage(from, text) {
   // 2. Captura de datos para técnico/asesor.
   if (supportSessions.has(from)) {
     if (await handleSupportSession(from, text)) return;
+  }
+
+  // 2.5 Esperando el nombre del titular de un comprobante.
+  if (receiptSessions.has(from)) {
+    if (await handleReceiptSession(from, text)) return;
   }
 
   // 3. Solicitud directa de técnico o asesor (también opción 7).
@@ -1286,6 +1416,13 @@ async function processMessage(from, text) {
     if (fixedReply === PAYMENT_REPLY) startPaymentFollowup(from);
     if (fixedReply.includes("MENÚ DE ATENCIÓN")) markGreeted(from);
     await reply(from, text, fixedReply);
+    return;
+  }
+
+  // 10.3 Ya envió comprobante y pregunta por su pago.
+  if (isReceiptStatusQuestion(from, text)) {
+    const session = receiptSessions.get(from);
+    await sendWhatsAppMessage(from, `Tu comprobante ya está registrado, ${session.name}, y está pendiente de revisión. Un asesor te confirmará el pago por este medio. Si es urgente, escribe *ASESOR*.`);
     return;
   }
 
@@ -1395,13 +1532,20 @@ app.post("/webhook", (req, res) => {
 
           if (!from) continue;
 
-          if (!text) {
-            // Audio, foto, sticker, etc.
-            if (!isCustomerPaused(from) && ["audio", "image", "video", "sticker", "document"].includes(message.type)) {
-              enqueueMessage(from, "__media__");
-            }
+          if (["audio", "image", "video", "sticker", "document"].includes(message.type)) {
+            const data = message[message.type] || {};
+            console.log("ARCHIVO RECIBIDO:", from, message.type);
+            enqueueMessage(from, {
+              media: true,
+              type: message.type,
+              id: data.id,
+              caption: (data.caption || "").trim(),
+              filename: data.filename
+            });
             continue;
           }
+
+          if (!text) continue;
 
           console.log("MENSAJE RECIBIDO:", from, text);
           enqueueMessage(from, text);
@@ -1414,13 +1558,9 @@ app.post("/webhook", (req, res) => {
 });
 
 // Mensajes que no son texto (audios, fotos): respuesta breve sin romper el flujo.
-async function processMessageWithMedia(from, text) {
-  if (text !== "__media__") return processMessage(from, text);
-  if (isCustomerPaused(from)) return;
-  const busy = [guideSessions, salesSessions, supportSessions].some(map => map.has(from));
-  await sendWhatsAppMessage(from, busy
-    ? "Recibí tu archivo. 😊 Por ahora solo puedo leer mensajes de texto; por favor responde con texto para continuar."
-    : "Recibí tu archivo. 😊 Por ahora solo puedo leer mensajes de texto. Si enviaste un comprobante de pago, escríbenos también tu *nombre completo* para que lo revise un asesor. Escribe *MENU* para ver las opciones.");
+async function processMessageWithMedia(from, payload) {
+  if (payload && typeof payload === "object" && payload.media) return handleIncomingMedia(from, payload);
+  return processMessage(from, payload);
 }
 
 app.get("/", (_req, res) => {
@@ -1431,7 +1571,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.3",
+    version: "V8.4",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1458,7 +1598,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.3 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.4 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
@@ -1486,5 +1626,5 @@ module.exports = {
   saysInternetIsBack,
   getTimeGreeting,
   fixGreetings,
-  sessions: { guideSessions, guideOffers, salesSessions, salesOffers, supportSessions, paymentFollowups }
+  sessions: { receiptSessions, guideSessions, guideOffers, salesSessions, salesOffers, supportSessions, paymentFollowups }
 };
