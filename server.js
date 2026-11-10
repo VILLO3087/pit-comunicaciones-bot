@@ -1,10 +1,11 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.5 (revisión completa)
+// Versión V8.6 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
 // V8.4: flujo de comprobante de pago: foto → nombre del titular → registro y aviso.
 // V8.5: solicitud de cuentas bancarias → se canaliza a un asesor; estado del comprobante solo con preguntas claras.
+// V8.6: "Buenas noches" después de una despedida se toma como despedida, no como saludo.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -409,6 +410,55 @@ function stripLeadingGreeting(text) {
   return stripped ? capitalize(stripped) : String(text || "").trim();
 }
 
+// DESPEDIDAS: recordar cuándo el bot se despidió o contestó por última vez.
+const lastBotMessageAt = new Map();
+const lastFarewellAt = new Map();
+const lastFarewellReplyAt = new Map();
+const FAREWELL_WINDOW = 30 * 60 * 1000;
+const ACTIVE_CHAT_WINDOW = 10 * 60 * 1000;
+
+function trackBotMessage(phone, message) {
+  const now = Date.now();
+  lastBotMessageAt.set(phone, now);
+  if (/que tengas (buenos d[ií]as|buenas tardes|buenas noches)/i.test(message)) lastFarewellAt.set(phone, now);
+}
+
+// "Buenas noches", "bye", "hasta mañana": saludo de hora o despedida sin otra cosa.
+function isGoodbyeGreeting(text) {
+  return /^(buenas noches|buenas tardes|buenos dias|buen dia|buenas|igualmente|igual|igualmente buenas noches|igualmente buenas tardes|bye|adios|hasta luego|hasta manana|hasta pronto|nos vemos|ok|okay|va|vale|sale|listo|perfecto|excelente|bien|de acuerdo|ok gracias|si gracias|gracias|muchas gracias|amen|bendiciones)$/.test(clean(text));
+}
+
+function hasActiveFlow(phone) {
+  return [guideSessions, guideOffers, salesSessions, salesOffers, supportSessions].some(map => map.has(phone)) ||
+    (receiptSessions.get(phone)?.step === "name");
+}
+
+// Devuelve true si el mensaje era una despedida y ya se atendió (o se ignoró a propósito).
+async function handleGoodbyeAfterFarewell(phone, text) {
+  if (hasActiveFlow(phone)) return false;
+  const now = Date.now();
+  const v = clean(text);
+  const recentFarewell = now - (lastFarewellAt.get(phone) || 0) < FAREWELL_WINDOW;
+  const recentChat = now - (lastBotMessageAt.get(phone) || 0) < ACTIVE_CHAT_WINDOW;
+
+  // El bot ya se despidió: "Buenas noches", "gracias", emoji → respuesta corta una sola vez.
+  if (recentFarewell && (v === "" || isGoodbyeGreeting(text) || isClosing(text))) {
+    if (now - (lastFarewellReplyAt.get(phone) || 0) < FAREWELL_WINDOW) return true; // no repetir
+    lastFarewellReplyAt.set(phone, now);
+    await sendWhatsAppMessage(phone, `¡Igualmente, que tengas ${getTimeGreeting()}! 😊`);
+    return true;
+  }
+
+  // Conversación reciente sin despedida: "Buenas noches" solo = se está despidiendo.
+  if (!recentFarewell && recentChat && /^(buenas noches|buenas tardes|buenos dias|buen dia|bye|adios|hasta luego|hasta manana|hasta pronto|nos vemos)$/.test(v)) {
+    lastFarewellReplyAt.set(phone, now);
+    await sendWhatsAppMessage(phone, farewellMessage());
+    return true;
+  }
+
+  return false;
+}
+
 function farewellMessage() {
   return `¡Con gusto! 😊 Gracias por comunicarte con *PIT COMUNICACIONES*. Si necesitas algo más, escribe *MENU*. ¡Que tengas ${getTimeGreeting()}!`;
 }
@@ -536,6 +586,7 @@ async function callWhatsApp(payload) {
 async function sendWhatsAppMessage(to, message) {
   if (typeof message !== "string" || !message.trim()) return false;
   const ok = await callWhatsApp({ to, type: "text", text: { body: message.slice(0, 4000) } });
+  if (ok) trackBotMessage(to, message);
   if (ok) console.log("Texto enviado a:", to);
   return ok;
 }
@@ -625,7 +676,7 @@ async function handleConnectionGuide(phone, message) {
 
   if (!answer) {
     // Simple "gracias" u "ok": no avanzar, solo recordar el paso.
-    if (isClosing(message) || /^(ok|okay|va|vale|sale|entendido|enterado|esta bien|bueno|deja veo|dejame ver|ahorita|un momento|espera|permiteme)$/.test(clean(message))) {
+    if (isClosing(message) || isGoodbyeGreeting(message) || /^(ok|okay|va|vale|sale|entendido|enterado|esta bien|bueno|deja veo|dejame ver|ahorita|un momento|espera|permiteme)$/.test(clean(message))) {
       await sendWhatsAppMessage(phone, `Con gusto, aquí te espero. 😊\n\n${STEP_PROMPTS[session.step]}`);
       return true;
     }
@@ -1185,6 +1236,12 @@ function cleanupSessions() {
   }
   if (pausesChanged) persistManualPauses();
 
+  for (const map of [lastBotMessageAt, lastFarewellAt, lastFarewellReplyAt]) {
+    for (const [phone, at] of map.entries()) {
+      if (now - at > FAREWELL_WINDOW) map.delete(phone);
+    }
+  }
+
   for (const [phone, at] of lastGreetings.entries()) {
     if (now - at > GREETING_WINDOW) lastGreetings.delete(phone);
   }
@@ -1354,6 +1411,9 @@ async function processMessage(from, text) {
   }
 
   const normalized = clean(text);
+
+  // 0. Despedida después de que el bot ya se despidió ("Buenas noches", "gracias", emoji).
+  if (await handleGoodbyeAfterFarewell(from, text)) return;
 
   // 1. Menú y cancelar siempre funcionan.
   if (["menu", "inicio", "menu principal"].includes(normalized)) {
@@ -1609,7 +1669,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.5",
+    version: "V8.6",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1636,7 +1696,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.5 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.6 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
