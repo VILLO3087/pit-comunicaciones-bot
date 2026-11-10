@@ -1,9 +1,10 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.4 (revisión completa)
+// Versión V8.5 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
 // V8.4: flujo de comprobante de pago: foto → nombre del titular → registro y aviso.
+// V8.5: solicitud de cuentas bancarias → se canaliza a un asesor; estado del comprobante solo con preguntas claras.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -249,7 +250,8 @@ function isSlowReport(text) {
 // Ya NO se activa con "día", "cuándo", "corte", "servicio" ni "internet" por sí solos.
 function isPaymentQuestion(text) {
   const v = clean(text);
-  return /\b(pago|pagos|pagar|pague|pagarle|mensualidad|mensualidades|mora|recargo|recargos|adeudo|atraso|atrasado|vencimiento|vence|cuenta para depositar|numero de cuenta|transferencia|deposito|oxxo|comprobante|corte por falta de pago|suspension por falta de pago|me suspendieron)\b/.test(v);
+  if (/\b(realizar|hacer|como hago|como realizo|quiero hacer|voy a hacer) (mi |el )?pago\b/.test(v)) return true;
+  return /\b(pago|pagos|pagar|pague|pagarle|paga|pagan|se paga|se pagan|mensualidad|mensualidades|mora|recargo|recargos|adeudo|atraso|atrasado|vencimiento|vence|cuenta para depositar|numero de cuenta|transferencia|deposito|oxxo|comprobante|corte por falta de pago|suspension por falta de pago|me suspendieron)\b/.test(v);
 }
 
 // "¿Y las mensualidades?", "¿Cuánto es la mensualidad?": pregunta de PRECIO, no de fechas.
@@ -271,6 +273,17 @@ function isOtherPlansQuestion(text) {
     /\b(que|cuales) (planes|paquetes) (tienen|manejan|hay|ofrecen)\b/.test(v) ||
     /\b(mas|otras) opciones\b/.test(v) ||
     /\b(subir|aumentar|mejorar) (de |la |mi )?(velocidad|plan|megas)\b/.test(v)
+  );
+}
+
+// "Puedes darme las cuentas", "a qué cuenta deposito", "me pasas la CLABE".
+function isBankAccountRequest(text) {
+  const v = clean(text);
+  return (
+    /\b(clabe|datos bancarios|datos de pago|datos para (pagar|depositar|transferir|el pago|la transferencia|el deposito))\b/.test(v) ||
+    /\b(cuenta|cuentas|numero de cuenta|tarjeta|numero de tarjeta|banco)\b.*\b(pago|pagar|pague|deposit\w*|transfer\w*|verificar|dar|darme|das|pasas|pasar|pasame|mandas|mandar|mandame|envias|enviar|enviame|compartir|compartes|cual|cuales|que|correcta|correctas)\b/.test(v) ||
+    /\b(pago|pagar|deposit\w*|transfer\w*|verificar|dar|darme|pasas|pasame|mandame|enviame|cual|cuales|a que|a cual|correcta|correctas)\b.*\b(cuenta|cuentas|numero de cuenta|tarjeta|numero de tarjeta|banco)\b/.test(v) ||
+    /\b(a donde|donde|a quien) (deposito|transfiero|deposite|transferi|le deposito|le transfiero|hago la transferencia|hago el deposito)\b/.test(v)
   );
 }
 
@@ -463,11 +476,13 @@ Conectando contigo.`;
 
 const SLOW_REPLY = `🐢 *INTERNET LENTO – PIT COMUNICACIONES*\n\nVamos a revisar tu conexión.\n\n1️⃣ Reinicia tu módem o router desconectándolo durante 30 segundos.\n2️⃣ Conéctalo nuevamente y espera a que encienda por completo.\n3️⃣ Comprueba si mejora la conexión.\n\nSi el problema continúa, escribe *ASESOR* para solicitar ayuda de un técnico.`;
 
-const PAYMENT_REPLY = `💳 *INFORMACIÓN DE PAGOS – PIT COMUNICACIONES*\n\n📅 Puedes realizar tu pago del día *15 al 20 de cada mes*.\n⚠️ A partir del día 21 se aplica un cargo adicional de *$30 MXN* por mora.\n🚫 El servicio puede ser suspendido por falta de pago.\n\nAceptamos efectivo, transferencia bancaria y depósito en OXXO.\n\nAl realizar tu pago, envía tu comprobante y nombre completo para verificarlo. No se confirma ningún pago hasta que sea revisado.\n\nSi necesitas apoyo, escribe *ASESOR*.`;
+const PAYMENT_REPLY = `💳 *INFORMACIÓN DE PAGOS – PIT COMUNICACIONES*\n\n📅 Puedes realizar tu pago del día *15 al 20 de cada mes*.\n⚠️ A partir del día 21 se aplica un cargo adicional de *$30 MXN* por mora.\n🚫 El servicio puede ser suspendido por falta de pago.\n\nAceptamos efectivo, transferencia bancaria y depósito en OXXO. Si necesitas los *datos de cuenta*, pídelos por aquí y un asesor te los compartirá.\n\nAl realizar tu pago, envía tu comprobante y nombre completo para verificarlo. No se confirma ningún pago hasta que sea revisado.\n\nSi necesitas apoyo, escribe *ASESOR*.`;
 
 const MONTHLY_REPLY = `💰 *MENSUALIDAD – PIT COMUNICACIONES*\n\nLa mensualidad del *Plan Familiar* es de *$350 MXN*.\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n♾️ Navegación sin límite.\n\nLa mensualidad es la misma en todas las localidades; lo que cambia es el costo de instalación. Se paga del día 15 al 20 de cada mes.\n\n¿Te interesa contratar? Escribe *CONTRATAR*.`;
 
 const OTHER_PLANS_REPLY = `🚀 *OTROS PLANES – PIT COMUNICACIONES*\n\nPara conocer si contamos con otros planes, mayor velocidad o paquetes especiales, te recomendamos hablar con un *asesor de ventas*. Él te dará información detallada y confirmará las opciones disponibles para tu localidad.\n\n👨‍💼 Escribe *ASESOR* para solicitar atención personalizada.\n\nNuestro plan actual es el *Plan Familiar*: 25 Mbps de descarga, 10 Mbps de subida, $350 MXN al mes.`;
+
+const BANK_ACCOUNT_REPLY = `🏦 *DATOS PARA PAGO – PIT COMUNICACIONES*\n\nCon gusto. Para darte los *datos de cuenta correctos*, tu solicitud será canalizada con un *asesor*, quien te los compartirá por este mismo chat.\n\nPor seguridad, el asistente automático no comparte números de cuenta. Usa solo los datos que te dé un asesor de PIT COMUNICACIONES.\n\nSi ya realizaste tu pago, envía la foto de tu comprobante y lo registramos para revisión.`;
 
 const PLAN_REPLY = `🚀 *PLAN FAMILIAR PIT COMUNICACIONES*\n\n📥 25 Mbps de descarga.\n📤 10 Mbps de subida.\n💰 *$350 MXN al mes.*\n♾️ Navegación sin límite.\n\n¿Te interesa contratar? Escribe *CONTRATAR*. Para hablar con ventas, escribe *ASESOR*.`;
 
@@ -1058,6 +1073,7 @@ REGLAS:
 - No inventes planes, precios, promociones, cobertura ni fechas.
 - Instalación: La Libertad $600, Emiliano Zapata $800, Ejido Morelos $1,200. En otras localidades un técnico debe confirmar cobertura y costo.
 - Si preguntan por otros planes, más velocidad o paquetes, NO digas que solo existe un plan: indica que un asesor de ventas les dará información y que escriban ASESOR.
+- Nunca des números de cuenta, CLABE ni tarjetas. Si los piden, di que un asesor le compartirá los datos correctos.
 - Pagos: del día 15 al 20 de cada mes. Desde el día 21 se cobran $30 MXN de mora y el servicio puede suspenderse. Solo menciona pagos si el cliente pregunta por pagos.
 - Si el cliente dice que no tiene Internet o que falla su servicio, NO hables de pagos: ofrece una guía rápida para revisar los cables.
 - Si el cliente dice que ya tiene Internet o se despide, agradece y despídete en una sola línea, sin hacer más preguntas.
@@ -1195,7 +1211,18 @@ function startPaymentFollowup(phone) {
 // COMPROBANTES DE PAGO (foto o PDF)
 // =====================================================================
 function isValidHolderName(text) {
-  return isValidName(text) && clean(text).split(" ").length >= 2 && !isOutageReport(text) && !isPaymentQuestion(text);
+  const v = clean(text);
+  return (
+    isValidName(text) &&
+    v.split(" ").length >= 2 &&
+    v.split(" ").length <= 6 &&
+    !isOutageReport(text) &&
+    !isPaymentQuestion(text) &&
+    !isBankAccountRequest(text) &&
+    !isHumanSupportRequest(text) &&
+    !isSalesIntent(text) &&
+    !/\b(me|pasas|pasame|dame|darme|puedes|podrias|quiero|necesito|tengo|tienes|cuenta|cuentas|internet|servicio|gracias|favor)\b/.test(v)
+  );
 }
 
 async function forwardReceiptToTeam(mediaList) {
@@ -1290,7 +1317,7 @@ async function handleReceiptSession(phone, text) {
   }
 
   // Otro tema (pregunta, falla, asesor): se atiende normalmente.
-  if (looksLikeQuestion(text) || isOutageReport(text) || isHumanSupportRequest(text) || isSalesIntent(text) || /^\d$/.test(clean(text))) {
+  if (looksLikeQuestion(text) || isBankAccountRequest(text) || isPaymentQuestion(text) || isOutageReport(text) || isHumanSupportRequest(text) || isSalesIntent(text) || /^\d$/.test(clean(text))) {
     receiptSessions.delete(phone);
     return false;
   }
@@ -1309,7 +1336,12 @@ async function handleReceiptSession(phone, text) {
 function isReceiptStatusQuestion(phone, text) {
   const session = receiptSessions.get(phone);
   if (!session || session.step !== "done" || Date.now() - session.updatedAt > 24 * 60 * 60 * 1000) return false;
-  return /\b(pago|pague|comprobante|confirm|confirman|confirmado|ya quedo|reviso|revisaron|recibieron|recibio|llego|deposito|transferencia)\b/.test(clean(text));
+  const v = clean(text);
+  return (
+    /\b(ya quedo|quedo|ya se registro|se registro|ya lo revisaron|ya revisaron|revisaron|ya reviso|confirmaron|confirmado|ya confirmaron|me confirman|recibieron|recibio|si llego|ya llego|llego|ya se vio|ya lo vieron)\b.*\b(pago|comprobante|transferencia|deposito)\b/.test(v) ||
+    /\b(mi|el) (pago|comprobante|transferencia|deposito)\b.*\b(ya quedo|quedo|registrado|confirmado|revisado|llego|recibido)\b/.test(v) ||
+    /^(ya quedo|y mi pago|y mi comprobante|que paso con mi pago|ya quedo mi pago)$/.test(v)
+  );
 }
 
 // =====================================================================
@@ -1416,6 +1448,12 @@ async function processMessage(from, text) {
     if (fixedReply === PAYMENT_REPLY) startPaymentFollowup(from);
     if (fixedReply.includes("MENÚ DE ATENCIÓN")) markGreeted(from);
     await reply(from, text, fixedReply);
+    return;
+  }
+
+  // 10.2 Pide cuentas bancarias: se canaliza con un asesor (el bot no inventa datos).
+  if (isBankAccountRequest(text)) {
+    await reply(from, text, BANK_ACCOUNT_REPLY);
     return;
   }
 
@@ -1571,7 +1609,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.4",
+    version: "V8.5",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1598,7 +1636,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.4 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.5 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
