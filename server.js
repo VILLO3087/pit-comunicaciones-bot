@@ -1,11 +1,13 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.6 (revisión completa)
+// Versión V8.7 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
 // V8.4: flujo de comprobante de pago: foto → nombre del titular → registro y aviso.
 // V8.5: solicitud de cuentas bancarias → se canaliza a un asesor; estado del comprobante solo con preguntas claras.
 // V8.6: "Buenas noches" después de una despedida se toma como despedida, no como saludo.
+// V8.7: comprobantes: saludos no son nombres, se extrae el nombre de "a nombre de X" / "pago de la C X",
+//       y "envío el pago" / "ahí está el pago" ya no muestran la información de pagos.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -59,6 +61,9 @@ const paymentFollowups = new Map();
 const supportSessions = new Map();
 const receiptSessions = new Map();
 const RECEIPT_WINDOW = 3 * 60 * 60 * 1000;
+// Nombre o aviso que el cliente escribe ANTES de mandar la foto.
+const pendingReceiptNotes = new Map();
+const PENDING_NOTE_WINDOW = 15 * 60 * 1000;
 const processedMessages = new Map();
 const phoneQueues = new Map();
 
@@ -251,6 +256,7 @@ function isSlowReport(text) {
 // Ya NO se activa con "día", "cuándo", "corte", "servicio" ni "internet" por sí solos.
 function isPaymentQuestion(text) {
   const v = clean(text);
+  if (isPaymentStatement(text)) return false;
   if (/\b(realizar|hacer|como hago|como realizo|quiero hacer|voy a hacer) (mi |el )?pago\b/.test(v)) return true;
   return /\b(pago|pagos|pagar|pague|pagarle|paga|pagan|se paga|se pagan|mensualidad|mensualidades|mora|recargo|recargos|adeudo|atraso|atrasado|vencimiento|vence|cuenta para depositar|numero de cuenta|transferencia|deposito|oxxo|comprobante|corte por falta de pago|suspension por falta de pago|me suspendieron)\b/.test(v);
 }
@@ -1236,6 +1242,10 @@ function cleanupSessions() {
   }
   if (pausesChanged) persistManualPauses();
 
+  for (const [phone, note] of pendingReceiptNotes.entries()) {
+    if (now - note.at > PENDING_NOTE_WINDOW) pendingReceiptNotes.delete(phone);
+  }
+
   for (const map of [lastBotMessageAt, lastFarewellAt, lastFarewellReplyAt]) {
     for (const [phone, at] of map.entries()) {
       if (now - at > FAREWELL_WINDOW) map.delete(phone);
@@ -1267,10 +1277,91 @@ function startPaymentFollowup(phone) {
 // =====================================================================
 // COMPROBANTES DE PAGO (foto o PDF)
 // =====================================================================
+// Quita saludos y relleno del inicio: "Buenas noches, Filiberto Aguilar" → "Filiberto Aguilar".
+function stripLeadingFiller(text) {
+  let out = String(text || "").trim();
+  const filler = /^\s*[¡!¿,.\-]*\s*(hola|buenas noches|buenas tardes|buenos d[ií]as|buen d[ií]a|buenas|que tal|disculpe|disculpa|oiga|oye|perd[oó]n|amigo|amiga|joven|se[ñn]or|se[ñn]ora|ok|okay|si|s[ií])\b[\s,.!:;\-]*/i;
+  for (let i = 0; i < 4 && filler.test(out); i++) out = out.replace(filler, "");
+  return out.trim();
+}
+
+const NAME_STOPWORDS = new Set([
+  "mes", "meses", "internet", "servicio", "pago", "pagos", "comprobante", "deposito", "transferencia",
+  "mensualidad", "noviembre", "diciembre", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+  "agosto", "septiembre", "octubre", "gracias", "favor", "aqui", "ahi", "esta", "envio", "mando", "cuenta",
+  "buenas", "buenos", "tardes", "noches", "dias", "dia", "hola", "mi", "su", "este", "esta", "pague",
+  "transferi", "deposite", "listo", "ya", "que", "le", "te", "lo", "la", "el", "los", "las"
+]);
+
+function toTitleCase(text) {
+  return String(text || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(word => (["de", "del", "la", "las", "los", "y"].includes(word) ? word : word.charAt(0).toUpperCase() + word.slice(1)))
+    .join(" ");
+}
+
+// ¿Parece nombre de persona? 2 a 6 palabras, solo letras, sin palabras de relleno.
+function looksLikePersonName(text) {
+  const raw = String(text || "").trim().replace(/[.,;:!?¡¿]+$/g, "").trim();
+  if (!raw || /\d/.test(raw)) return false;
+  if (!/^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ.\s]+$/.test(raw)) return false;
+  const words = clean(raw).split(" ").filter(Boolean);
+  const meaningful = words.filter(word => !["de", "del", "la", "las", "los", "y", "c"].includes(word));
+  if (meaningful.length < 2 || words.length > 7) return false;
+  return !meaningful.some(word => NAME_STOPWORDS.has(word) || word.length < 2);
+}
+
+// Saca el nombre del titular de frases como:
+// "…a nombre de Filiberto Aguilar Montilla", "Ahí está el pago de la C Angélica Ochoa",
+// "titular: Juan Pérez", "Buenas noches, José Carlos Sánchez".
+function extractHolderName(text) {
+  const raw = String(text || "").trim();
+  const patterns = [
+    /\ba\s+nombre\s+de(?:l)?\s+(?:la\s+|el\s+)?(?:c\.?\s+|sra\.?\s+|sr\.?\s+|se[ñn]ora\s+|se[ñn]or\s+|do[ñn]a\s+|don\s+)?(.+)$/i,
+    /\btitular\s*(?:es|:)?\s+(?:la\s+|el\s+)?(?:c\.?\s+|sra\.?\s+|sr\.?\s+|se[ñn]ora\s+|se[ñn]or\s+)?(.+)$/i,
+    /\b(?:de\s+la|del)\s+(?:c\.?|sra\.?|sr\.?|se[ñn]ora|se[ñn]or|do[ñn]a|don)\s+(.+)$/i,
+    /\b(?:pago|comprobante|dep[oó]sito|transferencia|mensualidad)\s+de\s+(?!la\s+mensualidad|el\s+mes|mes\b|internet\b|este\b|noviembre|diciembre|enero)(?:la\s+|el\s+)?(.+)$/i,
+    /\b(?:soy|me\s+llamo|mi\s+nombre\s+es)\s+(.+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = raw.match(pattern);
+    if (!match) continue;
+    let candidate = match[1]
+      .replace(/\s+(gracias|muchas gracias|por favor|saludos|bendiciones)\b.*$/i, "")
+      .replace(/[.,;:!?¡¿]+$/g, "")
+      .trim();
+    if (looksLikePersonName(candidate)) return toTitleCase(candidate);
+  }
+
+  // Mensaje que solo trae el nombre (con o sin saludo al inicio).
+  const stripped = stripLeadingFiller(raw);
+  if (stripped && looksLikePersonName(stripped)) return toTitleCase(stripped);
+  return null;
+}
+
+// Solo saludo ("Buenas tardes", "Hola buenas noches").
+function isOnlyGreeting(text) {
+  return /^(hola|holi|buenas|buenas noches|buenas tardes|buenos dias|buen dia|hola buenas|hola buenas noches|hola buenas tardes|hola buenos dias|que tal|hola que tal)$/.test(clean(text));
+}
+
+// El cliente AVISA que manda/hizo su pago (no pregunta): "envío el pago del mes", "ahí está el pago".
+function isPaymentStatement(text) {
+  const v = clean(text);
+  return (
+    /\b(envio|envie|envia|mando|mande|manda|paso|pase|adjunto|comparto|ahi esta|ahi va|ahi le va|ahi te va|aqui esta|aqui va|aqui le dejo|le dejo|te dejo|le envio|te envio|le mando|te mando|ya pague|ya deposite|ya transferi|ya realice|ya hice|realice|hice)\b.*\b(pago|comprobante|deposito|transferencia|mensualidad|ticket|recibo|voucher)\b/.test(v) ||
+    /^(pago del mes|mi pago|el pago|comprobante|comprobante de pago|mi comprobante|ticket de pago|pago de internet|pago del internet)$/.test(v)
+  );
+}
+
 function isValidHolderName(text) {
   const v = clean(text);
   return (
     isValidName(text) &&
+    !isOnlyGreeting(text) &&
+    !/^(buenas|buenos|buen|hola)\b/.test(v) &&
     v.split(" ").length >= 2 &&
     v.split(" ").length <= 6 &&
     !isOutageReport(text) &&
@@ -1296,7 +1387,7 @@ async function forwardReceiptToTeam(mediaList) {
 
 async function registerReceipt(phone, session, name) {
   session.step = "done";
-  session.name = String(name).trim();
+  session.name = toTitleCase(String(name).trim());
   session.updatedAt = Date.now();
 
   await notifyTeam(`🔔 COMPROBANTE DE PAGO PIT COMUNICACIONES\nTitular: ${session.name}\nTeléfono: ${phone}\nArchivos recibidos: ${session.media.length}\nEstado: Pendiente de verificación.`);
@@ -1335,8 +1426,9 @@ async function handleIncomingMedia(phone, media) {
   if (existing && existing.step === "name") {
     existing.media.push(media);
     existing.updatedAt = Date.now();
-    if (media.caption && isValidHolderName(media.caption)) {
-      await registerReceipt(phone, existing, media.caption);
+    const captionName = media.caption ? extractHolderName(media.caption) : null;
+    if (captionName) {
+      await registerReceipt(phone, existing, captionName);
       return;
     }
     await sendWhatsAppMessage(phone, "📄 Recibimos también este archivo. Para registrar tu pago, escribe el *nombre completo del titular del servicio*.");
@@ -1348,8 +1440,17 @@ async function handleIncomingMedia(phone, media) {
   const session = { step: "name", name: "", media: [media], attempts: 0, updatedAt: Date.now() };
   receiptSessions.set(phone, session);
 
-  if (media.caption && isValidHolderName(media.caption)) {
-    await registerReceipt(phone, session, media.caption);
+  const captionName = media.caption ? extractHolderName(media.caption) : null;
+  if (captionName) {
+    await registerReceipt(phone, session, captionName);
+    return;
+  }
+
+  // El cliente escribió el nombre antes de mandar la foto.
+  const note = pendingReceiptNotes.get(phone);
+  pendingReceiptNotes.delete(phone);
+  if (note && note.name && Date.now() - note.at < PENDING_NOTE_WINDOW) {
+    await registerReceipt(phone, session, note.name);
     return;
   }
 
@@ -1362,8 +1463,22 @@ async function handleReceiptSession(phone, text) {
   if (!session || session.step !== "name") return false;
   session.updatedAt = Date.now();
 
-  if (isValidHolderName(text)) {
-    await registerReceipt(phone, session, text);
+  // 1. Nombre dentro de la frase o nombre solo.
+  const name = extractHolderName(text);
+  if (name && !isBankAccountRequest(text) && !isOutageReport(text) && !isHumanSupportRequest(text)) {
+    await registerReceipt(phone, session, name);
+    return true;
+  }
+
+  // 2. Solo saludo: saludar y volver a pedir el nombre (no es un nombre).
+  if (isOnlyGreeting(text)) {
+    await sendWhatsAppMessage(phone, `¡${capitalize(getTimeGreeting())}! 😊 Para registrar tu comprobante, escribe el *nombre completo del titular del servicio*.`);
+    return true;
+  }
+
+  // 3. Aviso de pago sin nombre ("envío el pago del mes"): pedir el nombre.
+  if (isPaymentStatement(text)) {
+    await sendWhatsAppMessage(phone, "¡Gracias! Ya recibimos tu comprobante. Para registrarlo, solo escribe el *nombre completo del titular del servicio* (la persona a cuyo nombre está el Internet).");
     return true;
   }
 
@@ -1514,6 +1629,33 @@ async function processMessage(from, text) {
   // 10.2 Pide cuentas bancarias: se canaliza con un asesor (el bot no inventa datos).
   if (isBankAccountRequest(text)) {
     await reply(from, text, BANK_ACCOUNT_REPLY);
+    return;
+  }
+
+  // 10.25 Avisos de pago ("ahí está el pago de la C Angélica Ochoa", "envío el pago del mes").
+  if (isPaymentStatement(text) || /\ba nombre de\b/.test(normalized)) {
+    const name = extractHolderName(text);
+    const receipt = receiptSessions.get(from);
+    const recentReceipt = receipt && receipt.step === "done" && Date.now() - receipt.updatedAt < RECEIPT_WINDOW;
+
+    if (recentReceipt) {
+      if (name && clean(name) !== clean(receipt.name)) {
+        const previous = receipt.name;
+        receipt.name = name;
+        receipt.updatedAt = Date.now();
+        await notifyTeam(`🔔 TITULAR CORREGIDO PIT COMUNICACIONES\nTeléfono: ${from}\nAntes: ${previous}\nAhora: ${name}`);
+        await sendWhatsAppMessage(from, `✅ Gracias. Registramos el comprobante a nombre de *${name}*. Un asesor verificará el pago y te confirmará por este medio.`);
+      } else {
+        await sendWhatsAppMessage(from, `✅ Tu comprobante ya está registrado${receipt.name ? " a nombre de *" + receipt.name + "*" : ""} y pendiente de revisión. Un asesor te confirmará por este medio.`);
+      }
+      return;
+    }
+
+    // Aún no llega la foto: guardar el nombre y pedir el comprobante.
+    pendingReceiptNotes.set(from, { name, at: Date.now() });
+    await sendWhatsAppMessage(from, name
+      ? `¡Gracias! Envía la *foto o PDF de tu comprobante* y lo registramos a nombre de *${name}*.`
+      : "¡Gracias! Envía la *foto o PDF de tu comprobante* y el *nombre completo del titular del servicio* para registrarlo.");
     return;
   }
 
@@ -1669,7 +1811,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.6",
+    version: "V8.7",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1696,7 +1838,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.6 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.7 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
@@ -1724,5 +1866,7 @@ module.exports = {
   saysInternetIsBack,
   getTimeGreeting,
   fixGreetings,
+  extractHolderName,
+  isPaymentStatement,
   sessions: { receiptSessions, guideSessions, guideOffers, salesSessions, salesOffers, supportSessions, paymentFollowups }
 };
