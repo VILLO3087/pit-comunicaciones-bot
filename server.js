@@ -1,5 +1,5 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.8 (revisión completa)
+// Versión V8.9 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
@@ -10,6 +10,8 @@
 //       y "envío el pago" / "ahí está el pago" ya no muestran la información de pagos.
 // V8.8: el bot se presenta como asistente virtual (una vez por conversación) y canaliza a un asesor
 //       cuando el cliente busca a una persona o quiere entregar el pago en persona.
+// V8.9: lee los mensajes EDITADOS (Meta los manda como tipo "edit"): si el cliente edita el texto
+//       del comprobante para agregar el nombre, el bot lo registra sin volver a pedirlo.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -1494,6 +1496,45 @@ async function handleIncomingMedia(phone, media) {
   await sendWhatsAppMessage(phone, `📄 *COMPROBANTE RECIBIDO*\n\nGracias por enviar tu comprobante.\n\nPara registrarlo, escribe el *nombre completo del titular del servicio* (la persona a cuyo nombre está el Internet).\n\nSi no es un comprobante de pago, escribe *CANCELAR*.`);
 }
 
+// El cliente EDITÓ un mensaje (por ejemplo, agregó el nombre al texto de la foto del comprobante).
+async function handleEditedMessage(phone, edit) {
+  if (isCustomerPaused(phone)) return;
+  const inner = edit.message || {};
+  const isMedia = inner.type === "image" || inner.type === "document";
+  const newText = String(isMedia ? inner[inner.type]?.caption || "" : inner.text?.body || "").trim();
+  if (!newText) return;
+
+  const receipt = receiptSessions.get(phone);
+  const name = extractHolderName(newText);
+
+  // Esperábamos el nombre: si la edición lo trae, registrar.
+  if (receipt && receipt.step === "name") {
+    if (name) await registerReceipt(phone, receipt, name);
+    return;
+  }
+
+  // Ya registrado: si la edición trae otro nombre, actualizarlo.
+  if (receipt && receipt.step === "done" && Date.now() - receipt.updatedAt < RECEIPT_WINDOW) {
+    if (name && clean(name) !== clean(receipt.name)) {
+      const previous = receipt.name;
+      receipt.name = name;
+      receipt.updatedAt = Date.now();
+      await notifyTeam(`🔔 TITULAR CORREGIDO PIT COMUNICACIONES\nTeléfono: ${phone}\nAntes: ${previous}\nAhora: ${name}`);
+      await sendWhatsAppMessage(phone, `✅ Vimos tu corrección. Registramos el comprobante a nombre de *${name}*. Un asesor verificará el pago y te confirmará por este medio.`);
+    }
+    return;
+  }
+
+  // Edición del texto de una foto sin comprobante abierto: tratarla como comprobante con ese texto.
+  if (isMedia && (name || isPaymentStatement(newText))) {
+    await handleIncomingMedia(phone, { media: true, type: inner.type, id: inner[inner.type]?.id, caption: newText, filename: inner[inner.type]?.filename });
+    return;
+  }
+
+  // Otras ediciones de texto (cambian lo que ya se respondió): se ignoran para no duplicar respuestas.
+  console.log("EDICIÓN IGNORADA:", phone, newText);
+}
+
 // Texto recibido mientras se espera el nombre del titular.
 async function handleReceiptSession(phone, text) {
   const session = receiptSessions.get(phone);
@@ -1804,7 +1845,16 @@ app.post("/webhook", (req, res) => {
             processedMessages.set(message.id, Date.now());
           }
 
-          const from = message.from;
+          const from = message.from || change.value?.contacts?.[0]?.wa_id;
+
+          if (message.type === "edit" && message.edit) {
+            if (from) {
+              console.log("MENSAJE EDITADO:", from);
+              enqueueMessage(from, { edited: true, edit: message.edit });
+            }
+            continue;
+          }
+
           let text = "";
           if (message.type === "text") text = message.text?.body || "";
           if (message.type === "button") text = message.button?.text || "";
@@ -1842,6 +1892,7 @@ app.post("/webhook", (req, res) => {
 
 // Mensajes que no son texto (audios, fotos): respuesta breve sin romper el flujo.
 async function processMessageWithMedia(from, payload) {
+  if (payload && typeof payload === "object" && payload.edited) return handleEditedMessage(from, payload.edit);
   if (payload && typeof payload === "object" && payload.media) return handleIncomingMedia(from, payload);
   return processMessage(from, payload);
 }
@@ -1854,7 +1905,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.8",
+    version: "V8.9",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1881,7 +1932,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.8 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.9 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
