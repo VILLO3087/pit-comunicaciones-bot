@@ -1,5 +1,5 @@
 // PIT COMUNICACIONES – Bot de WhatsApp
-// Versión V8.7 (revisión completa)
+// Versión V8.8 (revisión completa)
 // V8.1: "¿Y las mensualidades?" responde el precio mensual; la IA saluda una sola vez.
 // V8.2: preguntas sin signos ("Pero la mensualidad que costo tiene") ya no se guardan como dirección.
 // V8.3: preguntas por otros planes o más velocidad se derivan a un asesor de ventas.
@@ -8,6 +8,8 @@
 // V8.6: "Buenas noches" después de una despedida se toma como despedida, no como saludo.
 // V8.7: comprobantes: saludos no son nombres, se extrae el nombre de "a nombre de X" / "pago de la C X",
 //       y "envío el pago" / "ahí está el pago" ya no muestran la información de pagos.
+// V8.8: el bot se presenta como asistente virtual (una vez por conversación) y canaliza a un asesor
+//       cuando el cliente busca a una persona o quiere entregar el pago en persona.
 //
 // Cambios principales respecto a la versión anterior:
 // - Se agregan funciones que se llamaban pero no existían
@@ -294,6 +296,19 @@ function isBankAccountRequest(text) {
   );
 }
 
+// El cliente busca a una persona o quiere coordinar algo en persona:
+// "don Villo se encontrará ahí a la una y media para llevarles el dinero".
+function isInPersonRequest(text) {
+  const v = clean(text);
+  return (
+    /\b(don villo|villo|don ovidio|el dueno|la duena|el encargado|la encargada|el jefe|la jefa)\b/.test(v) ||
+    /\b(se encuentra|se encontrara|encontrara|esta ahi|esta hay|estan ahi|esta en la oficina|estan en la oficina|hay alguien|esta abierto|a que hora abren|a que hora cierran|donde esta la oficina|donde estan ubicados|donde se ubican|direccion de la oficina)\b/.test(v) ||
+    /\b(llevar|llevarles|llevarle|llevo|les llevo|le llevo|yevar|yevarles|yevarle|yebar|yebarles|yebarle|lebar|lebarles|pasar a dejar|paso a dejar|pasare a dejar|ir a dejar|voy a dejar|entregar|entregarle|entregarles|pasar a pagar|paso a pagar|ir a pagar|pagar en persona|pagar en efectivo|pago en efectivo|pagarle en efectivo)\b/.test(v)
+  );
+}
+
+const IN_PERSON_REPLY = `🤖 Te atiende el *asistente virtual* de PIT COMUNICACIONES.\n\nPara coordinar la entrega de tu pago, una visita o confirmar si hay alguien disponible, tu mensaje debe verlo un *asesor*. Él te responderá por este mismo chat.\n\n👨‍💼 Escribe *ASESOR* para pedir que te atienda una persona.`;
+
 function isPriceQuestion(text) {
   const v = clean(text);
   return /\b(cuanto (cuesta|es|sale|cobran|vale)|precio|precios|costo|costos|planes|plan familiar|velocidad|cuantos megas|cuantos mbps|megas)\b/.test(v);
@@ -510,7 +525,9 @@ function clearFlows(phone) {
 function mainMenu() {
   return `📡 *PIT COMUNICACIONES*
 
-¡Hola, ${getTimeGreeting()}! 👋 Bienvenido.
+¡Hola, ${getTimeGreeting()}! 👋 Soy el *asistente virtual* de PIT COMUNICACIONES.
+
+Si en algún momento prefieres hablar con una persona, escribe *ASESOR*.
 
 ¿En qué podemos ayudarte?
 
@@ -589,8 +606,23 @@ async function callWhatsApp(payload) {
   }
 }
 
+// PRESENTACIÓN: el primer mensaje del bot en cada conversación aclara que es un asistente virtual.
+const lastIntroAt = new Map();
+const INTRO_WINDOW = 6 * 60 * 60 * 1000;
+const INTRO_LINE = "🤖 Te atiende el *asistente virtual* de PIT COMUNICACIONES. Si prefieres hablar con una persona, escribe *ASESOR*.";
+
+function withIntro(to, message) {
+  if (to === NOTIFY_PHONE) return message;
+  const now = Date.now();
+  const introduced = now - (lastIntroAt.get(to) || 0) < INTRO_WINDOW;
+  lastIntroAt.set(to, now);
+  if (introduced || /asistente virtual/i.test(message)) return message;
+  return `${INTRO_LINE}\n\n${message}`;
+}
+
 async function sendWhatsAppMessage(to, message) {
   if (typeof message !== "string" || !message.trim()) return false;
+  message = withIntro(to, message);
   const ok = await callWhatsApp({ to, type: "text", text: { body: message.slice(0, 4000) } });
   if (ok) trackBotMessage(to, message);
   if (ok) console.log("Texto enviado a:", to);
@@ -1116,7 +1148,7 @@ async function getAIReply(phone, message, options = {}) {
     ? `NO SALUDES: el cliente ya fue saludado en esta conversación. No empieces con "Hola", "Buenas noches" ni otro saludo; responde directo. Solo si el cliente se despide puedes desearle "${greeting}".`
     : `Puedes saludar solo al inicio con "${greeting}". Nunca uses "buen día" ni otro saludo diferente.`;
 
-  const instructions = `Eres el asesor virtual de PIT COMUNICACIONES, proveedor de Internet inalámbrico en La Libertad (Chiapas), Emiliano Zapata (Tabasco), Ejido Morelos y comunidades cercanas.
+  const instructions = `Eres el ASISTENTE VIRTUAL (bot automático) de PIT COMUNICACIONES, proveedor de Internet inalámbrico en La Libertad (Chiapas), Emiliano Zapata (Tabasco), Ejido Morelos y comunidades cercanas.
 
 FECHA Y HORA ACTUAL EN CIUDAD DE MÉXICO: ${getMexicoDateText()}.
 SALUDO CORRECTO EN ESTE MOMENTO: "${greeting}". ${greetingRule}
@@ -1130,6 +1162,7 @@ REGLAS:
 - No inventes planes, precios, promociones, cobertura ni fechas.
 - Instalación: La Libertad $600, Emiliano Zapata $800, Ejido Morelos $1,200. En otras localidades un técnico debe confirmar cobertura y costo.
 - Si preguntan por otros planes, más velocidad o paquetes, NO digas que solo existe un plan: indica que un asesor de ventas les dará información y que escriban ASESOR.
+- Eres un asistente virtual, no una persona. Nunca finjas ser el dueño, un técnico o un asesor, ni digas "aquí solo te puedo apoyar". Si el cliente busca a una persona (por ejemplo "don Villo"), quiere coordinar una visita, una entrega de dinero o algo que tú no puedes resolver, dile que eres el asistente virtual y que escriba ASESOR para que lo atienda una persona.
 - Nunca des números de cuenta, CLABE ni tarjetas. Si los piden, di que un asesor le compartirá los datos correctos.
 - Pagos: del día 15 al 20 de cada mes. Desde el día 21 se cobran $30 MXN de mora y el servicio puede suspenderse. Solo menciona pagos si el cliente pregunta por pagos.
 - Si el cliente dice que no tiene Internet o que falla su servicio, NO hables de pagos: ofrece una guía rápida para revisar los cables.
@@ -1244,6 +1277,10 @@ function cleanupSessions() {
 
   for (const [phone, note] of pendingReceiptNotes.entries()) {
     if (now - note.at > PENDING_NOTE_WINDOW) pendingReceiptNotes.delete(phone);
+  }
+
+  for (const [phone, at] of lastIntroAt.entries()) {
+    if (now - at > INTRO_WINDOW) lastIntroAt.delete(phone);
   }
 
   for (const map of [lastBotMessageAt, lastFarewellAt, lastFarewellReplyAt]) {
@@ -1632,6 +1669,12 @@ async function processMessage(from, text) {
     return;
   }
 
+  // 10.2b Busca a una persona o quiere entregar el pago en persona.
+  if (isInPersonRequest(text)) {
+    await reply(from, text, IN_PERSON_REPLY);
+    return;
+  }
+
   // 10.25 Avisos de pago ("ahí está el pago de la C Angélica Ochoa", "envío el pago del mes").
   if (isPaymentStatement(text) || /\ba nombre de\b/.test(normalized)) {
     const name = extractHolderName(text);
@@ -1811,7 +1854,7 @@ app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
     service: "pit-comunicaciones-api",
-    version: "V8.7",
+    version: "V8.8",
     whatsappWebhook: true,
     aiConfigured: Boolean(OPENAI_API_KEY),
     aiModel: OPENAI_MODEL,
@@ -1838,7 +1881,7 @@ if (require.main === module) {
   loadManualPauses()
     .then(() => {
       app.listen(PORT, "0.0.0.0", () => {
-        console.log(`PIT COMUNICACIONES V8.7 activo en puerto ${PORT}`);
+        console.log(`PIT COMUNICACIONES V8.8 activo en puerto ${PORT}`);
         console.log(`Archivo de pausas: ${PAUSES_FILE}`);
         console.log(`Hora de México: ${getMexicoDateText()} (${getTimeGreeting()})`);
       });
